@@ -152,14 +152,14 @@ class ZramAdvisor:
 
     def load_script(self):
         """ Give the user the onboot script"""
-        pathname = os.path.join(self.script_dir, 'zram-fix')
+        pathname = os.path.join(self.script_dir, 'fix-zram')
         with open(pathname, "r", encoding='utf8') as fh:
             install_script = fh.read()
         return install_script
 
     def setup_script(self, install_script):
-        """ Dump 'zram-fix' into /tmp and run it."""
-        pathname = os.path.join('/tmp', 'zram-fix')
+        """ Dump 'fix-zram' into /tmp and run it."""
+        pathname = os.path.join('/tmp', 'fix-zram')
         with open(pathname, "w", encoding='utf-8') as fh:
             fh.write(install_script)
         os.chmod(pathname, 0o755)
@@ -368,10 +368,10 @@ class ZramAdvisor:
         parser = argparse.ArgumentParser()
         parser.add_argument('--DB', action="store_true",
                 help='debug creation of low-level objects/data')
-        parser.add_argument('-s', '--setup-zram-fix', action="store_true",
-                help='installs "zram-fix" program and start zRAM')
-        parser.add_argument('-d', '--dump-zram-fix', action="store_true",
-                help='dumps "zram-fix" for manual install')
+        parser.add_argument('-s', '--setup-fix-zram', action="store_true",
+                help='installs "fix-zram" program and start zRAM')
+        parser.add_argument('-d', '--dump-fix-zram', action="store_true",
+                help='dumps "fix-zram" for manual install')
         parser.add_argument('-t', '--gen-test-sites', action="store_true",
                 help='dump html for importing into web-browser for load test')
         opts = parser.parse_args()
