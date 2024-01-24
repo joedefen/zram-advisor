@@ -10,9 +10,10 @@ fedoraproject.org/wiki/Changes/Scale_ZRAM_to_full_memory_size
 kernelnewbies.org/Linux_5.8 - when swappiness rose to 2020-08-02
 
 Tested on:
-Linux Mint (Mate) 21.3 - 5.x kernel (upgrade)
-Debian (KDE) 12.4.0
-Linux Lite 6.6 - 5.x kernel
+ - Linux Mint (Mate) 21.3 - 6.5 kernel (upgraded)
+ - Debian (KDE) 12.4.0
+ - Linux Lite 6.6 - 5.x kernel
+ - elementary OS 7.1 Horus
 """
 # pylint: disable=invalid-name,multiple-statements,global-statement
 # pylint: disable=too-many-instance-attributes,broad-exception-caught
@@ -152,14 +153,14 @@ class ZramAdvisor:
 
     def load_script(self):
         """ Give the user the onboot script"""
-        pathname = os.path.join(self.script_dir, 'fix-zram')
+        pathname = os.path.join(self.script_dir, 'fix-zram.sh')
         with open(pathname, "r", encoding='utf8') as fh:
             install_script = fh.read()
         return install_script
 
     def setup_script(self, install_script):
         """ Dump 'fix-zram' into /tmp and run it."""
-        pathname = os.path.join('/tmp', 'fix-zram')
+        pathname = os.path.join('/tmp', 'fix-zram.sh')
         with open(pathname, "w", encoding='utf-8') as fh:
             fh.write(install_script)
         os.chmod(pathname, 0o755)
@@ -366,14 +367,14 @@ class ZramAdvisor:
     def main(self):
         """ Do something useful. """
         parser = argparse.ArgumentParser()
-        parser.add_argument('--DB', action="store_true",
-                help='debug creation of low-level objects/data')
         parser.add_argument('-s', '--setup-fix-zram', action="store_true",
-                help='installs "fix-zram" program and start zRAM')
+                help='install "fix-zram" program and start zRAM')
         parser.add_argument('-d', '--dump-fix-zram', action="store_true",
-                help='dumps "fix-zram" for manual install')
+                help='dump "fix-zram" for manual install')
         parser.add_argument('-t', '--gen-test-sites', action="store_true",
                 help='dump html for importing into web-browser for load test')
+        parser.add_argument('--DB', action="store_true",
+                help='debug creation of low-level objects/data')
         opts = parser.parse_args()
 
         try:
