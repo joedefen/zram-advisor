@@ -160,22 +160,22 @@ Description=Init zRAM on boot
 
 [Service]
 Type=simple
-ExecStart=/bin/bash ${script_bin_path} ${factor}x ${capM}M
+ExecStart=/bin/bash ${script_bin_path} -c${count} ${factor}x ${capM}M
 
 [Install]
 WantedBy=multi-user.target
 END
 
-    ( run "chmod 644 '$dest'" )
-    ( run "systemctl enable --now $service")
+    run "chmod 644 '$dest'"
+    run "systemctl enable --now ${service}"
 
 }
 unsetup_systemd() {
     dest="/etc/systemd/system/fix-zram.service"
     service=$(basename "$dest")
     if [ -f "$dest" ]; then
-        ( run "systemctl disable --now $service")
-        ( run "rm '$dest'" )
+        run "systemctl disable --now ${service}"
+        run "rm '$dest'"
     fi
 }
 
@@ -183,39 +183,53 @@ unsetup_systemd() {
 # sysVinit service setup
 setup_sysVinit() {
     wrapper="/etc/init.d/fix-zram-init"
-    service=$(basename "$wrapper")
+    service=$(basename "${wrapper}")
 
-    cat <<END > "$wrapper"
-#!/bin/sh
+    cat <<END > "${wrapper}"
+#!/bin/bash
+### BEGIN INIT INFO
+# Default-Start:     2 3 4 5
+# Default-Stop:
+### END INIT INFO
+
 case "$1" in
-  start) sudo bash ${script_bin_path} ;;
+  start) sudo bash ${script_bin_path} load -c${count} ${factor}x ${capM}M;;
+  stop) sudo bash ${script_bin_path} --unload ;;
   *)     ;;
 esac
 exit 0
 END
-    ( run "chmod 755 '$dest'" )
+    run "chmod 755 '$wrapper'"
 
     if which chkconfig >/dev/null 2>&1; then
-        chkconfig --add $service
+        run "chkconfig --add ${service}"
     elif which update-rc.d >/dev/null 2>&1; then
-        updaterc.d service_wrapper.sh defaults
+        run "update-rc.d ${wrapper} defaults"
     fi
+    if which service >/dev/null 2>&1; then
+        run "service $service enable"
+        run "service $service start"
+    elif which update-rc.d >/dev/null 2>&1; then
+        run "update-rd.d $service enable"
+        run "$wrapper start"
+    fi
+
 }
 unsetup_sysVinit() {
     wrapper="/etc/init.d/fix-zram-init"
-    service=$(basename "$wrapper")
+    service=$(basename "${wrapper}")
     if which service >/dev/null 2>&1; then
-        service $service stop
-        service $service disable
+        run "service ${service} stop"
+        run "service ${service} disable"
     elif which update-rc.d >/dev/null 2>&1; then
-        $wrapper stop
-        update-rd.d $service disable
+        run "${wrapper} stop"
+        run "update-rd.d ${service} disable"
     fi
-    rm $wrapper
+    run "rm ${wrapper}"
     if which update-rc.d >/dev/null 2>&1; then
-        update-rc.d -f $service remove
+        run "update-rc.d -f ${service} remove"
     fi
-    rm /var/log/$service.log
+    run "rm /var/log/${service}.log"
 }
 
 ########################################################

@@ -386,10 +386,10 @@ class ZramAdvisor:
             except Exception:
                 print("cannot get os-release or lsb-release")
 
-        if opts.dump_zram_fix:
+        if opts.dump_fix_zram:
             install_script = self.load_script()
             print(install_script, end='')
-        elif opts.setup_zram_fix:
+        elif opts.setup_fix_zram:
             install_script = self.load_script()
             self.setup_script(install_script)
         elif opts.gen_test_sites:
