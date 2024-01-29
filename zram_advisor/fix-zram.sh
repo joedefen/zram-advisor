@@ -5,6 +5,7 @@ swappiness=180
 watermark_boost_factor=0
 watermark_scale_factor=125
 page_cluster=0
+priority=100
     #   default options to this script
 factor=1.75
 capM=$((12*1024))  # the default cap on zRAM
@@ -21,8 +22,8 @@ where:
           load      - load/start zRAM  with given params or their defaults
           reload    - remove any existing zRAM and load zram
           unload    - unloads any existing zRAM
-          setup     - copy fix-zram to '/usr/local/bin' and setup service [dflt=no]
-          unsetup   - remove '/usr/local/bin/fix-zram' and remove service [dflt=no]
+          setup     - copy fix-zram to '/usr/local/bin' and setup service
+          unsetup   - remove '/usr/local/bin/fix-zram' and remove service
   -n,--dry-run  - only print commands that would be executed
   -c{integer}   - set number of zram devices
   {float}x      - set zram-size to {float} * ram at most [dflt=$factor]
@@ -142,7 +143,7 @@ load_zram() {
 
     for (( ii=0; ii<count; ii++ )); do
         run mkswap /dev/zram${ii}
-        run swapon --priority 100 /dev/zram${ii}
+        run swapon --priority ${priority} /dev/zram${ii}
     done
     run "zramctl"
 }

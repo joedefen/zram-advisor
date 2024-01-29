@@ -370,9 +370,9 @@ class ZramAdvisor:
         parser.add_argument('-s', '--setup-fix-zram', action="store_true",
                 help='install "fix-zram" program and start zRAM')
         parser.add_argument('-d', '--dump-fix-zram', action="store_true",
-                help='dump "fix-zram" for manual install')
+                help='print "fix-zram.sh" for manual install')
         parser.add_argument('-t', '--gen-test-sites', action="store_true",
-                help='dump html for importing into web-browser for load test')
+                help='print "bookmarks.html" to import to a web-browser for load test')
         parser.add_argument('--DB', action="store_true",
                 help='debug creation of low-level objects/data')
         opts = parser.parse_args()
@@ -403,6 +403,9 @@ class ZramAdvisor:
             self.params = self.get_vm_params()
             self.effective = self.compute_effective()
             self.show_system_summary()
-
-if __name__ == "__main__":
+def run():
+    """ Entry point"""
     ZramAdvisor().main()
+    
+if __name__ == "__main__":
+    run()

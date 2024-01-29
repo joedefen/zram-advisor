@@ -1,16 +1,17 @@
-# zram-advisor: Check/Setup/Test zRAM Tool
 > **Quick-start**:
-> * If running python 5.11+, install `pipx`, and install with `pipx install zram-advisor`
-> * else install `pip`, and install with `pip install zram-advisor --user`
-> * `zram-advisor` - reports on currently running zRAM 
-> * `zram-advisor --setup` - configure/starts zRAM w defaults on system w/o rRAM configured.
+* If running python 5.11+, install `pipx`, and install with `pipx install zram-advisor`
+* else install `pip`, and install with `pip install zram-advisor --user`
+* `zram-advisor` - reports on currently running zRAM 
+* `zram-advisor --setup` - configure/starts zRAM w defaults on system w/o rRAM already configured.
 
+# zram-advisor: Check/Setup/Test zRAM Tool
 `zram-advisor` can:
 * Check on your running zRAM and report ill advised settings and zRAM effectiveness.
 * Install `fix-zram` which can setup your zRAM and/or reload it with different parameters (e.g., for testing).
 * Provide a browser bookmark file to be imported to help testing your settings.
 
 ## Checking Your Running zRAM
+#### Checking with zram-advisor
 Here is the sample output of `zram-advisor` w/o arguments on a system with zRAM running:
 ```
 $ zram-advisor 
@@ -38,7 +39,8 @@ zram0:
     * **uncmpr**: is the amount of "original" memory stored by zRAM; its limit is officially called 'disksize' which is the name/value you see from `zramctl`.
     * **RAM**: is the amount of physical RAM consumed by zRAM including overhead; **most** it the largest RAM used since boot.
     
-Another app (installable with `pipx` or `pip`) is pmemstat. The top of it sample output (on the same system as above) was:
+#### Checking with pmemstat
+Another app (installable with `pipx` or `pip`) is `pmemstat``. The top of it sample output (on the same system as above) was:
 ```
 14:41:39 Tot=952.4M Used=741.5M Avail=210.9M Oth=0 Sh+Tmp=8.7M PIDs=122
      0.6/ker  zRAM=210.2M eTot:2.2G/240% eUsed:1.5G/166% eAvail:705.7M/74%
@@ -49,8 +51,22 @@ Another app (installable with `pipx` or `pip`) is pmemstat. The top of it sample
 ```
 * You can see those same "effective" key memory stats, plus you can see kernel cpu% (i.e., the `0.6/ker`). Kernal CPU (most the swap process) can be significant, and that CPU cost is the primary "cost" of using zRAM).
 
-## Setting up zRAM with fix-zram
-`fix-zram` is bash script bundled with `zram-advisor`. `fix-zram` usage is:
+## zram-advisor Options
+```
+usage: zram-advisor [-h] [-s] [-d] [-t] [--DB]
+options:
+  -s, --setup-fix-zram  install "fix-zram" program and start zRAM
+  -d, --dump-fix-zram   print "fix-zram.sh" for manual install
+  -t, --gen-test-sites  print "bookmarks.html" to import to a web-browser for load test
+```
+* **--setup-fix-zram** installs a programs `fix-ram` and creates a service called `fix-zram-init` to run it on boot.
+* **--dump-fix-zram** prints the stock `fix-zram.sh` (e.g., so you can modify it) and install your modified script by running it (e.g., `bash my-fix-zram.sh`).
+* **--gen-test-sites** prints a .html that can be imported into most browsers which creates folders of sites that can be opened to create typical memory demands (of browsers at least).
+
+**Note:** do not install `fix-zram` if w/o uninstalling any competing tool to configure zRAM.
+
+## Controlling zRAM with fix-zram
+`fix-zram.sh` is bash script bundled with `zram-advisor`. Its usage is:
 ```
 fix-zram [--(load|reload|unload|setup|unsetup)] [-n|--dry-run] [-cN] [N.Nx] [Nm|Ng]
 where:
@@ -66,6 +82,17 @@ where:
   {integer}m    - set gross zram-size to {integer} megabytes at most [dflt=12288m]
   {integer}g    - set gross zram-size to {integer} gigabytes at most
 ```
-### zRAM Setup Methods
-* `zram-advisor --setup` - installs `fix-zram` and creates the `zram-init-fix` service which will load zRAM per the defaults on each load
-* `zram-advisor --setup` - installs `fix-zram` and creates the `zram-init-fix` service which will load zRAM per the defaults on each load
+### fix-zram Run-Time Commands
+`load`, `reload`, and `unload` affect the running system and any effect do not survive reboot. So, these can be used for testing (or initializing) zRAM.
+* `load` and `reload` set the `vm.*` parameters shown by `vram-advisor` (but they do not unset them although a reboot will do that).
+* `unload` and `reload` remove preexisting zRAM if running. Removal only works if all memory stored in zRAM can be placed in memory or another storage device.
+
+Typical use:
+* `fix-zram reload 3x 12g` - will unload the current zRAM (if exists and possible), and then install zRAM with sized at the minimum of 3xRAM and 12GB.
+
+### fix-zram Setup Methods
+* `fix-zram --setup` - installs `fix-zram` and creates a `zram-init-fix` service which will load zRAM per the defaults on each load with default values.
+* `fix-zram --unsetup` - removes the  installed `fix-zram` and removes the `zram-init-fix` service.
+
+Typical use:
+* `fix-zram setup 3x 12g` - installs a zRAM init service that start zRAM sized at the minimum of 3xRAM and 12GB on boot.
