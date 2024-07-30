@@ -17,12 +17,14 @@ Tested on:
 """
 # pylint: disable=invalid-name,multiple-statements,global-statement
 # pylint: disable=too-many-instance-attributes,broad-exception-caught
+# pylint: disable=too-many-locals
 
 import re
 from types import SimpleNamespace
 import shutil
 import os
 import sys
+import traceback
 import configparser
 import time
 import argparse
@@ -155,16 +157,18 @@ class ZramAdvisor:
         """ Give the user the onboot script"""
         pathname = os.path.join(self.script_dir, 'fix-zram.sh')
         with open(pathname, "r", encoding='utf8') as fh:
-            install_script = fh.read()
-        return install_script
+            script = fh.read()
+        return script
 
-    def setup_script(self, install_script):
+    def run_script(self, keyword, arguments=None):
         """ Dump 'fix-zram' into /tmp and run it."""
+        script = self.load_script()
         pathname = os.path.join('/tmp', 'fix-zram.sh')
         with open(pathname, "w", encoding='utf-8') as fh:
-            fh.write(install_script)
+            fh.write(script)
         os.chmod(pathname, 0o755)
-        os.system(f'set -x; sudo bash {pathname} --setup')
+        arguments = [] if arguments is None else arguments
+        os.system(f'set -x; sudo bash {pathname} --{keyword} {" ".join(arguments)}')
 
     def create_site_import(self):
         """ Get a randomly chosen site """
@@ -312,8 +316,10 @@ class ZramAdvisor:
         return ns
 
 
-    def show_system_summary(self):
+    def show_system_summary(self, once=False):
         """ Just the facts, ma'am """
+        if not once:
+            print(f'{"":>18} [[ type CTL-C to terminate]]')
         print(f'{"Distro":>16} : {self.release.marquee}')
         for param in self.params.values():
             ok = '....' if param.least <= param.value <= param.most else ' NOT'
@@ -363,18 +369,26 @@ class ZramAdvisor:
 
             emit = Term.pos_up(1) + Term.erase_line() + '\r'
             print((4 + len(self.devs) * 4) * emit, end='')
+            if once:
+                break
 
     def main(self):
         """ Do something useful. """
         parser = argparse.ArgumentParser()
         parser.add_argument('-s', '--setup-fix-zram', action="store_true",
-                help='install "fix-zram" program and start zRAM')
+                help='install/run "fix-zram --setup [args ...]" for persistent install')
         parser.add_argument('-d', '--dump-fix-zram', action="store_true",
                 help='print "fix-zram.sh" for manual install')
         parser.add_argument('-t', '--gen-test-sites', action="store_true",
                 help='print "bookmarks.html" to import to a web-browser for load test')
         parser.add_argument('--DB', action="store_true",
                 help='debug creation of low-level objects/data')
+        parser.add_argument('-L', '--reload', action="store_true",
+                help='run "fix-zram --reload [args ...]" to test zRAM w/o any footprint')
+        parser.add_argument('-U', '--unload', action="store_true",
+                help='run "fix-zram --unload"')
+        parser.add_argument('args', nargs='*', type=str,
+                help='arguments for --reload')
         opts = parser.parse_args()
 
         try:
@@ -383,29 +397,46 @@ class ZramAdvisor:
         except Exception:
             try:
                 self.release = self.get_name_value_info('/etc/lsb-release')
-                self.release.marquee = self.distrib_description
+                self.release.marquee = self.release.distrib_description
             except Exception:
                 print("cannot get os-release or lsb-release")
 
-        if opts.dump_fix_zram:
-            install_script = self.load_script()
-            print(install_script, end='')
-        elif opts.setup_fix_zram:
-            install_script = self.load_script()
-            self.setup_script(install_script)
-        elif opts.gen_test_sites:
-            import_html = self.create_site_import()
-            print(import_html, end='')
-        else:
+        def loop(once=False):
+            nonlocal self
             self.meminfo = self.get_meminfo()
             self.probe = self.prober()
             self.devs = self.get_zram_stats()
             self.params = self.get_vm_params()
             self.effective = self.compute_effective()
-            self.show_system_summary()
+            self.show_system_summary(once)
+
+        if opts.reload:
+            self.run_script('reload', opts.args)
+            loop()
+        elif opts.unload:
+            self.run_script('unload')
+            loop(once=True)
+        elif opts.dump_fix_zram:
+            script = self.load_script()
+            print(script, end='')
+        elif opts.setup_fix_zram:
+            self.run_script('setup', opts.args)
+        elif opts.gen_test_sites:
+            import_html = self.create_site_import()
+            print(import_html, end='')
+        else:
+            loop()
 def run():
     """ Entry point"""
-    ZramAdvisor().main()
-    
+    try:
+        ZramAdvisor().main()
+    except KeyboardInterrupt:
+        print('\n   OK, QUITTING NOW\n')
+        sys.exit(0)
+    except Exception as exce:
+        print("exception:", str(exce))
+        print(traceback.format_exc())
+        sys.exit(15)
+
 if __name__ == "__main__":
     run()

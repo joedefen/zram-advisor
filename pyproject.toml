@@ -8,6 +8,15 @@
 #      python3 -m pip install --upgrade pip
 #      python3 -m pip install --upgrade build
 #      python3 -m pip install --upgrade twine
+#
+# Run w/o install from project dir:
+#      S=$PWD/src
+#      PYTHONPATH=$S src/zram_advisor/main.py
+#      PYTHONPATH=$S python3 -m zram_advisor.main
+#
+# Install locally:
+#      rm -r dist; python3 -m build; ls dist/.; pip install -e . --break-system-packages
+# 
 # 
 # PUBLIC Build and deploy (from project directory):
 #   ## BUMP the version (below in [project])
@@ -28,32 +37,33 @@
 #   ## VISIT  https://test.pypi.org/project/zram-advisor and delete old versions
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
 
 [project]
-version = "1.0.0"
+version = "1.1.0"
 name = "zram-advisor"
 authors = [
-    {name = "Joe Defen", email = "joedef@gmail.com"},
+    {name = "Joe Defen", email = "joedef@duck.com"},
 ]
 description = "zRAM status and setup tools"
 readme = "README.md"
 requires-python = ">=3.8"
 keywords = ["zram", "zram service"]
-license = "MIT"
+license = { text = "MIT" }
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux"
 ]
-dependencies = [
-    "requests",
-    'importlib-metadata; python_version<"3.8"',
-]
+
+[project.urls]
+"Homepage" = "https://github.com/joedefen/zram-advisor"
+"Bug Tracker" = "https://github.com/joedefen/zram-advisor/issues"
 
 [project.scripts]
-zram-advisor = "zram_advisor.zram_advisor:run"
+zram-advisor = "zram_advisor.main:run"
 
 [tool.hatch.build.targets.wheel]
 packages = ["zram_advisor"]
@@ -61,9 +71,15 @@ packages = ["zram_advisor"]
 [tool.hatch.build.targets.sdist]
 exclude = [
     "__pycache__",
-    "zram_advisor/__pycache__",
 ]
 
-[project.urls]
-"Homepage" = "https://github.com/joedefen/zram-advisor"
-"Bug Tracker" = "https://github.com/joedefen/zram-advisor/issues"
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+exclude = [
+    "__pycache__",
+]

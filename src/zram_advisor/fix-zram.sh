@@ -19,8 +19,7 @@ usage() {
 USE: fix-zram [--(load|reload|unload|setup|unsetup)] [-n|--dry-run] [-cN] [N.Nx] [Nm|Ng]
 where:
   --{command} defaults to 'load' but can be one of:
-          load      - load/start zRAM  with given params or their defaults
-          reload    - remove any existing zRAM and load zram
+          load      - remove any existing zRAM and load zRAM with optional params
           unload    - unloads any existing zRAM
           setup     - copy fix-zram to '/usr/local/bin' and setup service
           unsetup   - remove '/usr/local/bin/fix-zram' and remove service
@@ -29,6 +28,12 @@ where:
   {float}x      - set zram-size to {float} * ram at most [dflt=$factor]
   {integer}m    - set gross zram-size to {integer} megabytes at most [dflt=${capM}m]
   {integer}g    - set gross zram-size to {integer} gigabytes at most
+Currently fixed values are:
+    vm.swappiness=$swappiness
+    vm.watermark_boost_factor=$watermark_boost_factor
+    vm.watermark_scale_factor=$watermark_scale_factor
+    vm.page-cluster=$page_cluster
+    zRam-swap-priority=100
 END
     exit 1
 }
@@ -58,7 +63,7 @@ for arg in "$@"; do
         *(-)c[0-9]*)
             count="${arg##*c}"
             ;;
-        *(-)load)       command=load ;;
+        *(-)load)       command=reload ;;
         *(-)reload)     command=reload ;;
         *(-)unload)     command=unload ;;
         *(-)setup)      command=setup ;;
@@ -238,7 +243,9 @@ unsetup_sysVinit() {
 setup() {
     script_tmp_dir=$(realpath "$0")
     script_bin_path="/usr/local/bin/fix-zram"
-    ( run "cp '$script_tmp_dir' '$script_bin_path'" )
+    if [[ $script_tmp_dir != $script_bin_path ]]; then
+        ( run "cp '$script_tmp_dir' '$script_bin_path'" )
+    fi
 
     init_cmd=$(ps -p 1 -o comm=)
     case "$init_cmd" in
@@ -257,7 +264,7 @@ unsetup() {
       systemd) ( unsetup_systemd ) ;;
       *) echo unhandled init type "$init_cmd" ;;
     esac
-    rm $script_bin_path
+    ( set -x; rm $script_bin_path)
 }
 
 if [[ $command == 'setup' ]]; then
