@@ -1,53 +1,14 @@
-# HOW TO PUBLISH...
-#
-# Prep Work (ensure need modules are up-to-date):
-#   sudo pacman -Syu python-pip
-#   sudo pacman -Syu python-build
-#   sudo pacman -Syu python-twine
-#   -- antiquated way
-#      python3 -m pip install --upgrade pip
-#      python3 -m pip install --upgrade build
-#      python3 -m pip install --upgrade twine
-#
-# Run w/o install from project dir:
-#      S=$PWD/src
-#      PYTHONPATH=$S src/zram_advisor/main.py
-#      PYTHONPATH=$S python3 -m zram_advisor.main
-#
-# Install locally:
-#      rm -r dist; python3 -m build; ls dist/.; pip install -e . --break-system-packages
-# 
-# 
-# PUBLIC Build and deploy (from project directory):
-#   ## BUMP the version (below in [project])
-#   rm -r dist; python3 -m build; ls dist/.
-#   python3 -m twine upload dist/*
-#     ## Enter __token__ and the saved TOKEN (in bitwarden)
-#   pipx upgrade zram-advisor || pipx install zram-advisor # >= python3.11
-#   --OR-- sudo python3 -m pip install zram-advisor # <= python3.10
-#   ## VISIT  https://pypi.org/project/zram-advisor and delete old versions
-#
-# TEST Build and test (from project directory):
-#   ## BUMP the version (below in [project])
-#   rm -r dist; python3 -m build
-#   python3 -m twine upload --repository testpypi dist/*
-#     ## Enter __token__ and the saved TOKEN (in bitwarden)
-#   pip install --upgrade --index-url https://test.pypi.org/simple/ --no-deps --user --break-system-packages zram-advisor
-#   pip uninstall --break-system-packages zram-advisor
-#   ## VISIT  https://test.pypi.org/project/zram-advisor and delete old versions
-
 [build-system]
-requires = ["setuptools>=42", "wheel"]
-build-backend = "setuptools.build_meta"
-
+requires = ["flit_core>=3.4"]
+build-backend = "flit_core.buildapi"
 
 [project]
-version = "1.1.1"
 name = "zram-advisor"
+version = "1.1.2"
+description = "zRAM status and setup tools"
 authors = [
     {name = "Joe Defen", email = "joedef@duck.com"},
 ]
-description = "zRAM status and setup tools"
 readme = "README.md"
 requires-python = ">=3.8"
 keywords = ["zram", "zram service"]
@@ -65,15 +26,5 @@ classifiers = [
 [project.scripts]
 zram-advisor = "zram_advisor.main:run"
 
-[tool.setuptools]
-package-dir = {"" = "src"}
-
-[tool.setuptools.packages.find]
-where = ["src"]
-
-[tool.setuptools.package-data]
-zram_advisor = ["*.sh", ]
-
-exclude = [
-    "__pycache__",
-]
+[tool.flit.sdist]
+include = ["zram_advisor/*.sh"]
