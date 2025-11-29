@@ -37,23 +37,19 @@
 #### Checking with zram-advisor
 Here is the sample output of `zram-advisor` w/o arguments on a system with zRAM running:
 ```
-$ zram-advisor 
-                   [[ type CTL-C to terminate]]
-          Distro : Ubuntu 24.04.2 LTS
+13:24:48  Distro : Ubuntu 24.04.2 LTS
              180 : vm.swappiness.................. in [150, 200]
                0 : vm.watermark_boost_factor...... in [0, 0]
              125 : vm.watermark_scale_factor...... in [125, 125]
                0 : vm.page-cluster................ in [0, 0]
              12G : zRAM.disksize.................. >= 11.4G
-================ 162s ================
-            7.6G : Total Memory     eTotal=16.5G/217%
-          6G/79% : Used              eUsed=8.2G/108%
-        1.6G/21% : Available        eAvail=8.3G/109%
-zram0:
-   uncmpr: 2.8G limit=12G
-     cmpr: 618M/8% factor=4.68:1 effective=4.57:1 → 3.88:1 projected (medium confidence)
-     RAM: 633.6M/8% most=769.6M/10% limit=0
-
+───────────────────────────────────────────────────────────────────────────────────────────────
+            7.6G : Total Memory     eTotal=16.3G/214%
+        6.2G/81% : Used              eUsed=8.1G/107%
+        1.5G/19% : Available        eAvail=8.2G/107%
+   zram0: uncmpr : 2.6G limit=12G
+            cmpr : 607.3M/8% 4.34:1 eff=4.23:1 → 3.60:1 (confident)
+             RAM : 623.1M/8% most=941M/12% limit=0
 ```
 * The top section shows key parameters for zRAM and suggested ranges (if it did not like those it would preface the range with "NOT in")
 * The midsection shows traditional key memory stats on the left, and on the right, the "effective values":
@@ -61,25 +57,26 @@ zram0:
     *In this example, we have more memory in use than we have physical RAM (thanks to compression).*
   * **eTotal** and **eAvail**: projected "effective" numbers based on the current compression ratio; these become more accurate as the zRAM memory footprint increases. *In this example, in effect, we have 2.2G memory (not 952.4M) and the "available" RAM is nearly as much as physical RAM (although also using more RAM than physical RAM)*.
 * The lower section are stats for each zram device .. typically, there is just one.
-    * **uncmpr**: amount of "original" memory stored by zRAM; its limit is officially called 'disksize' which is the name/value you see from `zramctl`.
+    * **uncmpr**: amount of "original" memory stored by zRAM; its "limit" value is officially called 'disksize' which is the name/value you see from `zramctl`.
     * **cmpr**: compressed data size and compression metrics:
-      * **factor**: pure compression ratio (how well the algorithm compressed: 2.8G→618M = 4.68:1)
-      * **effective**: real-world ratio including zRAM's metadata overhead (633.6M actual RAM used for 2.8G data = 4.57:1)
-      * **projected**: expected ratio when zRAM fills up, accounting for compression degradation as memory diversifies (3.88:1)
-      * **confidence**: reliability of projection based on current usage (low <10%, medium 10-50%, high >50% of disksize)
+      * **factor**: pure compression ratio (how well the algorithm compressed: 2.6G→607.3M = 4.34:1)
+      * **effective**: real-world ratio including zRAM's metadata overhead (623.1M actual RAM used for 2.6G data = 4.23:1)
+      * **projected**: expected ratio when zRAM fills up, accounting for compression degradation as memory diversifies (3.60:1)
+      * **confidence**: reliability of projection based on current usage (uncertain <10%, confident 10-50%, certain >50% of disksize)
     * **RAM**: amount of physical RAM consumed by zRAM including overhead; **most**: largest RAM used since boot.
     
 #### Checking with pmemstat
 Another app (installable with `pipx` or `pip`) is `pmemstat`. The top of its sample output (on the same system as above) was:
 ```
-14:41:39 Tot=952.4M Used=741.5M Avail=210.9M Oth=0 Sh+Tmp=8.7M PIDs=122
-     0.6/ker  zRAM=210.2M eTot:2.2G/240% eUsed:1.5G/166% eAvail:705.7M/74%
+10:54:02 Tot=7.6G Used=5.6G Avail=2.1G Oth=0 Sh+Tmp=630.3M PIDs=166
+     2.8%/ker MajF/s=21  zRAM=553.6M CR=4.4 eTot:16.4G eUsed:7.4G eAvail:9.0G
  cpu_pct   pswap   other    data  ptotal   key/info (exe by mem)
-     9.8     945     100     195   1,239 T 122x --TOTALS in MB --
-───────────────────────────────────────────────────────────────────────────
-     3.3     396      65     106     567   23x chromium
+    52.9   1,960     644   3,419   6,023 T 165x --TOTALS in MB --
+───────────────────────────────────────────────────────────────────────────────
+     2.5     781      77     932   1,789   19x browser
 ```
-* You can see those same "effective" key memory stats, plus you can see kernel cpu% (i.e., the `0.6/ker`). Kernal CPU (most the swap process) can be significant, and that CPU cost is the primary "cost" of using zRAM).
+* You can see those same "effective" key memory stats, plus you can see:
+  *  kernel cpu% (i.e., the `0.6/ker`). Kernal CPU (most the swap process) can be significant, and that CPU cost is the primary "cost" of using zRAM.
 
 ## zram-advisor Options
 ```

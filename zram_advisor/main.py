@@ -135,13 +135,13 @@ def compute_zram_effective(meminfo_total, meminfo_used, meminfo_available,
     # Degradation logic based on current usage
     if usage_fraction < 0.10:
         degradation_factor = 0.75  # Aggressive: little real data
-        confidence = "low"
+        confidence = "uncertain"
     elif usage_fraction < 0.50:
         degradation_factor = 0.85  # Moderate: some real data
-        confidence = "medium"
+        confidence = "confident"
     else:
         degradation_factor = 0.95  # Conservative: lots of real data
-        confidence = "high"
+        confidence = "certain"
 
     projected_ratio = ratio * degradation_factor
 
@@ -400,75 +400,128 @@ class ZramAdvisor:
         return result
 
 
-    def show_system_summary(self, once=False):
-        """ Just the facts, ma'am """
-        if not once:
-            print(f'{"":>18} [[ type CTL-C to terminate]]')
-        print(f'{"Distro":>16} : {self.release.marquee}')
+    def _build_display_lines(self, delta_seconds):
+        """Build the display lines for both console-window and print output"""
+        lines = []
+        meminfo = self.meminfo
+        eff = self.effective
+
+        # Header section - add HH:MM:SS timestamp in top left corner
+        timestamp = time.strftime("%H:%M:%S")
+        lines.append(f'{timestamp:<8}{"Distro":>8} : {self.release.marquee}')
         for param in self.params.values():
             ok = '....' if param.least <= param.value <= param.most else ' NOT'
-            print(f'{param.value:>16} : vm.{param.name.ljust(24, ".")}'
-                  f'{ok} in [{param.least}, {param.most}]')
-        if not self.devs:
-            print('   NO zRAM: zRAM is either not installed or not enabled')
-            sys.exit(1)
+            lines.append(f'{param.value:>16} : vm.{param.name.ljust(24, ".")}'
+                        f'{ok} in [{param.least}, {param.most}]')
+
         GB = 1024*1024*1024
         ram = self.meminfo.MemTotal
         min_disksize = (1.5*ram if ram <= 8*GB else 4*GB)
         actual_disksize = self.effective.stats.disksize
         ok = '....' if min_disksize <= actual_disksize else ' NOT'
-        print(f'{human(actual_disksize):>16} : {"zRAM.disksize".ljust(27, ".")}'
-              f'{ok} >= {human(min_disksize)}')
+        lines.append(f'{human(actual_disksize):>16} : {"zRAM.disksize".ljust(27, ".")}'
+                    f'{ok} >= {human(min_disksize)}')
 
-        start = time.time()
-        time.sleep(2)
-        for _ in range(1000*1000):
-            meminfo = self.meminfo
-            eff = self.effective
-            delta = int(round(time.time() - start))
-            print('='*16, f'{delta}s', '='*16)
-            print(f'{human(self.meminfo.MemTotal):>16} : {"Total Memory":<16}',
-                        f'eTotal={self.human_pct(eff.e_max_used)}')
-            print(f'{self.human_pct(meminfo.MemUsed):>16} : {"Used":<16}',
-                        f' eUsed={self.human_pct(eff.e_used)}')
-            print(f'{self.human_pct(meminfo.MemAvailable):>16} : {"Available":<16}',
-                        f'eAvail={self.human_pct(eff.e_avail)}')
-            for dev, stats in self.devs.items():
-                print(f'{dev}:')
-                print(f'   uncmpr: {human(stats.orig_data_size)} limit={human(stats.disksize)}')
-                # Pure compression factor (data reduction only)
-                factor = (stats.orig_data_size/stats.compr_data_size
-                            if stats.compr_data_size > 0 else 0)
-                # Effective ratio (includes zRAM overhead)
-                ratio_current = eff.ratio_current if eff.ratio_current else factor
-                ratio_proj = eff.ratio_projected if eff.ratio_projected else factor
-                conf = eff.projection_confidence
+        # Body section (dynamic stats) - no separator line
+        lines.append(f'{human(meminfo.MemTotal):>16} : {"Total Memory":<16} '
+                    f'eTotal={self.human_pct(eff.e_max_used)}')
+        lines.append(f'{self.human_pct(meminfo.MemUsed):>16} : {"Used":<16} '
+                    f' eUsed={self.human_pct(eff.e_used)}')
+        lines.append(f'{self.human_pct(meminfo.MemAvailable):>16} : {"Available":<16} '
+                    f'eAvail={self.human_pct(eff.e_avail)}')
 
-                # Show compressed size and both ratios
-                print(f'     cmpr: {self.human_pct(stats.compr_data_size)}',
-                        f'factor={factor:.2f}:1', end='')
-                if ratio_current != factor:
-                    print(f' effective={ratio_current:.2f}:1', end='')
-                if conf:
-                    print(f' → {ratio_proj:.2f}:1 projected ({conf} confidence)', end='')
-                print()  # newline
+        for dev, stats in self.devs.items():
+            # Align colons with all other lines (column 17)
+            # Combine device name with uncmpr, right-align to match other lines
+            uncmpr_label = f'{dev}: uncmpr'
+            lines.append(f'{uncmpr_label:>16} : {human(stats.orig_data_size)} limit={human(stats.disksize)}')
 
-                print(f'     RAM: {self.human_pct(stats.mem_used_total)}'
-                                    if stats.mem_used_total > 0 else 'n/a',
-                        f'most={self.human_pct(stats.mem_used_max)}',
+            # Pure compression factor (data reduction only)
+            factor = (stats.orig_data_size/stats.compr_data_size
+                        if stats.compr_data_size > 0 else 0)
+            # Effective ratio (includes zRAM overhead)
+            ratio_current = eff.ratio_current if eff.ratio_current else factor
+            ratio_proj = eff.ratio_projected if eff.ratio_projected else factor
+            conf = eff.projection_confidence
+
+            # Compact cmpr line - align colon with all other lines
+            line = f'{"cmpr":>16} : {self.human_pct(stats.compr_data_size)} {factor:.2f}:1'
+            if ratio_current != factor:
+                line += f' eff={ratio_current:.2f}:1'
+            if conf:
+                line += f' → {ratio_proj:.2f}:1 ({conf})'
+            lines.append(line)
+
+            ram_part = (self.human_pct(stats.mem_used_total)
+                       if stats.mem_used_total > 0 else 'n/a')
+            lines.append(f'{"RAM":>16} : {ram_part} '
+                        f'most={self.human_pct(stats.mem_used_max)} '
                         f'limit={self.human_pct(stats.mem_limit)}')
-            
-            if self.DB:
-                break
-            time.sleep(1)
-            self.meminfo = self.get_meminfo()
-            self.devs = self.get_zram_stats()
-            self.effective = self.compute_effective()
 
-            emit = Term.pos_up(1) + Term.erase_line() + '\r'
-            print((4 + len(self.devs) * 4) * emit, end='')
-            if once:
-                break
+        return lines
+
+    def show_system_summary(self, once=False):
+        """ Display system summary using console-window (or print if once=True) """
+        if not self.devs:
+            print('   NO zRAM: zRAM is either not installed or not enabled')
+            sys.exit(1)
+
+        # For once mode, just print and exit
+        if once:
+            lines = self._build_display_lines(0)
+            for line in lines:
+                print(line)
+            return
+
+        # Use console-window for live updating display
+        try:
+            from console_window import ConsoleWindow
+        except ImportError:
+            print("ERROR: console-window not installed. Install with: pip install console-window")
+            sys.exit(1)
+
+        win = ConsoleWindow(head_line=True,
+                            ctrl_c_terminates=False, keys=[0x3])
+        start = time.time()
+        time.sleep(2)  # Initial delay
+
+        try:
+            while True:
+                delta = int(round(time.time() - start))
+                lines = self._build_display_lines(delta)
+
+                # Split into header (static) and body (dynamic)
+                # Header is: timestamp+distro, vm params (4), disksize = 6 lines
+                # Body is: memory stats and zRAM device info
+                header_end = 6  # First 6 lines are static header
+
+                win.clear()
+                for line in lines[:header_end]:
+                    win.add_header(line)
+                for line in lines[header_end:]:
+                    win.add_body(line)
+
+                win.render()
+                key = win.prompt(seconds=1.0)
+
+                if key or self.DB:
+                    # User pressed a key (including ctrl+c=0x3) or debug mode
+                    break
+
+                # Update data for next iteration
+                self.meminfo = self.get_meminfo()
+                self.devs = self.get_zram_stats()
+                self.effective = self.compute_effective()
+
+        finally:
+            # ALWAYS print final snapshot after exiting console-window
+            # (whether by keypress, ctrl+c, or exception)
+            win.stop_curses()
+            print("\nFinal snapshot:")
+            lines = self._build_display_lines(int(round(time.time() - start)))
+            for line in lines:
+                print(line)
+            print()
 
     def main(self):
         """ Do something useful. """

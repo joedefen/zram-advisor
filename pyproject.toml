@@ -11,6 +11,9 @@ authors = [
 ]
 readme = "README.md"
 requires-python = ">=3.8"
+dependencies = [
+    "console-window",
+]
 keywords = ["zram", "zram service"]
 license = { text = "MIT" }
 classifiers = [
