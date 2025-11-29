@@ -14,6 +14,14 @@ Tested on:
  - Debian (KDE) 12.4.0
  - Linux Lite 6.6 - 5.x kernel
  - elementary OS 7.1 Horus
+
+
+- Add compression ratio degradation - multiply ratio by 0.85 or so for projections
+- Add warnings when:
+  - Projection based on < 10% zRAM usage (unreliable)
+  - Compression ratio is below 2.0 (zRAM may not be worth it)
+    disksize is limiting more than RAM would (misconfiguration)
+Consider documenting the formula more clearly - it's clever but dense
 """
 # pylint: disable=invalid-name,multiple-statements,global-statement
 # pylint: disable=too-many-instance-attributes,broad-exception-caught
@@ -287,29 +295,61 @@ class ZramAdvisor:
                 stats[key] += value
         stats = SimpleNamespace(**stats)
 
-        ns = SimpleNamespace(e_used=meminfo.MemUsed,
-            e_avail=meminfo.MemAvailable, e_total=meminfo.MemTotal,
-            e_max_used=meminfo.MemTotal, stats=stats)
+        ns = SimpleNamespace(
+                e_used=meminfo.MemUsed,
+                e_avail=meminfo.MemAvailable,
+                e_total=meminfo.MemTotal,
+                e_max_used=meminfo.MemTotal,
+                stats=stats,
+                usage_fraction=None,
+                ratio_current=None,
+                ratio_projected=None,
+                projection_confidence=None,
+            )
         e_used = meminfo.MemUsed - stats.mem_used_total + stats.orig_data_size
         ratio = None
         if e_used <= ns.e_used: # zram hurts. assume not enuf data to project
             e_used = ns.e_used
-            ratio = 3.5 # wild guess for projection
-            # if self.DB: dump_effective(ns, '(unchg)')
-            # return ns
+            ratio = 2.75 # somewhat conservative wild guess for projection
         ns.e_used = e_used
         limit_pct = self.limit_pct
         if stats.mem_limit > 0:
-            stats_limit_pct = (stats.limit / meminfo.MemTotal)*100
-            limit_pct = min(1.0, limit_pct, stats_limit_pct)
+            stats_limit_pct = (stats.mem_limit / meminfo.MemTotal)*100
+            limit_pct = min(100.0, limit_pct, stats_limit_pct)
             # projected amount of orig used memory that fits in limit
         if ratio is None: # hopefully about 4 ;-)
             ratio = stats.orig_data_size / stats.mem_used_total
-        e_max_used = ratio * meminfo.MemTotal * limit_pct/100
+        # Calculate how much of disksize is currently used
+        usage_fraction = stats.orig_data_size / stats.disksize if stats.disksize > 0 else 0
+        
+        # Degradation logic:
+        # - Low usage (<10%): High uncertainty, use aggressive degradation (0.75x)
+        # - Medium usage (10-50%): Moderate degradation (0.85x)  
+        # - High usage (>50%): Data is reliable, minimal degradation (0.95x)
+        if usage_fraction < 0.10:
+            degradation_factor = 0.75  # Aggressive: little real data
+            confidence = "low"
+        elif usage_fraction < 0.50:
+            degradation_factor = 0.85  # Moderate: some real data
+            confidence = "medium"
+        else:
+            degradation_factor = 0.95  # Conservative: lots of real data
+            confidence = "high"
+        
+        projected_ratio = ratio * degradation_factor
+        
+        # Store both ratios in namespace for reporting
+        ns.ratio_current = ratio
+        ns.ratio_projected = projected_ratio
+        ns.projection_confidence = confidence
+        ns.usage_fraction = usage_fraction
+        
+        # Use projected ratio for future projections
+        e_max_used = projected_ratio * meminfo.MemTotal * limit_pct/100
             # now limit by disksize
         e_max_used = min(e_max_used, stats.disksize)
             # now add uncompressed memory
-        e_max_used += meminfo.MemTotal - e_max_used/ratio
+        e_max_used += meminfo.MemTotal - e_max_used/projected_ratio
         ns.e_max_used = e_max_used
         ns.e_avail = e_max_used - e_used
         if self.DB: dump_effective(ns)
@@ -352,14 +392,28 @@ class ZramAdvisor:
             for dev, stats in self.devs.items():
                 print(f'{dev}:')
                 print(f'   uncmpr: {human(stats.orig_data_size)} limit={human(stats.disksize)}')
+                # Pure compression factor (data reduction only)
                 factor = (stats.orig_data_size/stats.compr_data_size
                             if stats.compr_data_size > 0 else 0)
+                # Effective ratio (includes zRAM overhead)
+                ratio_current = eff.ratio_current if eff.ratio_current else factor
+                ratio_proj = eff.ratio_projected if eff.ratio_projected else factor
+                conf = eff.projection_confidence
+
+                # Show compressed size and both ratios
                 print(f'     cmpr: {self.human_pct(stats.compr_data_size)}',
-                        f'factor={factor:.2f}')
+                        f'factor={factor:.2f}:1', end='')
+                if ratio_current != factor:
+                    print(f' effective={ratio_current:.2f}:1', end='')
+                if conf:
+                    print(f' → {ratio_proj:.2f}:1 projected ({conf} confidence)', end='')
+                print()  # newline
+
                 print(f'     RAM: {self.human_pct(stats.mem_used_total)}'
                                     if stats.mem_used_total > 0 else 'n/a',
                         f'most={self.human_pct(stats.mem_used_max)}',
                         f'limit={self.human_pct(stats.mem_limit)}')
+            
             if self.DB:
                 break
             time.sleep(1)

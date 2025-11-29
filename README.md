@@ -39,20 +39,20 @@ Here is the sample output of `zram-advisor` w/o arguments on a system with zRAM 
 ```
 $ zram-advisor 
                    [[ type CTL-C to terminate]]
-          Distro : Linux Mint 21.3
+          Distro : Ubuntu 24.04.2 LTS
              180 : vm.swappiness.................. in [150, 200]
                0 : vm.watermark_boost_factor...... in [0, 0]
              125 : vm.watermark_scale_factor...... in [125, 125]
                0 : vm.page-cluster................ in [0, 0]
-            1.6G : zRAM.disksize.................. >= 1.4G
-================ 410s ================
-          952.4M : Total Memory     eTotal=2.2G/239%
-      830.2M/87% : Used              eUsed=1.4G/155%
-      122.3M/13% : Available        eAvail=800.7M/84%
+             12G : zRAM.disksize.................. >= 11.4G
+================ 162s ================
+            7.6G : Total Memory     eTotal=16.5G/217%
+          6G/79% : Used              eUsed=8.2G/108%
+        1.6G/21% : Available        eAvail=8.3G/109%
 zram0:
-   uncmpr: 814.5M limit=1.6G
-     cmpr: 158.5M/17% factor=5.14
-     RAM: 165.5M/17% most=240M/25% limit=0
+   uncmpr: 2.8G limit=12G
+     cmpr: 618M/8% factor=4.68:1 effective=4.57:1 → 3.88:1 projected (medium confidence)
+     RAM: 633.6M/8% most=769.6M/10% limit=0
 
 ```
 * The top section shows key parameters for zRAM and suggested ranges (if it did not like those it would preface the range with "NOT in")
@@ -62,10 +62,15 @@ zram0:
   * **eTotal** and **eAvail**: projected "effective" numbers based on the current compression ratio; these become more accurate as the zRAM memory footprint increases. *In this example, in effect, we have 2.2G memory (not 952.4M) and the "available" RAM is nearly as much as physical RAM (although also using more RAM than physical RAM)*.
 * The lower section are stats for each zram device .. typically, there is just one.
     * **uncmpr**: amount of "original" memory stored by zRAM; its limit is officially called 'disksize' which is the name/value you see from `zramctl`.
+    * **cmpr**: compressed data size and compression metrics:
+      * **factor**: pure compression ratio (how well the algorithm compressed: 2.8G→618M = 4.68:1)
+      * **effective**: real-world ratio including zRAM's metadata overhead (633.6M actual RAM used for 2.8G data = 4.57:1)
+      * **projected**: expected ratio when zRAM fills up, accounting for compression degradation as memory diversifies (3.88:1)
+      * **confidence**: reliability of projection based on current usage (low <10%, medium 10-50%, high >50% of disksize)
     * **RAM**: amount of physical RAM consumed by zRAM including overhead; **most**: largest RAM used since boot.
     
 #### Checking with pmemstat
-Another app (installable with `pipx` or `pip`) is `pmemstat``. The top of it sample output (on the same system as above) was:
+Another app (installable with `pipx` or `pip`) is `pmemstat`. The top of its sample output (on the same system as above) was:
 ```
 14:41:39 Tot=952.4M Used=741.5M Avail=210.9M Oth=0 Sh+Tmp=8.7M PIDs=122
      0.6/ker  zRAM=210.2M eTot:2.2G/240% eUsed:1.5G/166% eAvail:705.7M/74%
