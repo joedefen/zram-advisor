@@ -83,6 +83,89 @@ def human(number):
     return 'TooHuge'
 
 ##############################################################################
+def compute_zram_effective(meminfo_total, meminfo_used, meminfo_available,
+                          zram_orig_data_size, zram_mem_used_total,
+                          zram_disksize, zram_mem_limit=0, limit_pct=80):
+    """
+    Compute effective memory values accounting for zRAM compression.
+
+    This is a PORTABLE function that can be copy-pasted between projects.
+    NO class dependencies - all inputs passed as parameters.
+
+    Args:
+        meminfo_total: Total physical RAM in bytes
+        meminfo_used: Currently used RAM in bytes
+        meminfo_available: Available RAM in bytes
+        zram_orig_data_size: Uncompressed data size stored in zRAM (bytes)
+        zram_mem_used_total: Physical RAM consumed by zRAM including overhead (bytes)
+        zram_disksize: Max uncompressed data zRAM will accept (bytes)
+        zram_mem_limit: Max RAM zRAM can use (0=unlimited) (bytes)
+        limit_pct: Arbitrary limit on % of RAM zRAM should use (default 80%)
+
+    Returns:
+        SimpleNamespace with:
+            - e_used: Effective memory used (uncompressed equivalent)
+            - e_avail: Effective memory available
+            - e_max_used: Maximum effective memory at full zRAM capacity
+            - ratio_current: Current effective compression ratio
+            - ratio_projected: Projected ratio accounting for degradation
+            - projection_confidence: 'low', 'medium', or 'high'
+            - usage_fraction: Fraction of disksize currently used
+    """
+    # Calculate effective used memory (what it would be if uncompressed)
+    e_used = meminfo_used - zram_mem_used_total + zram_orig_data_size
+
+    # Determine compression ratio
+    ratio = None
+    if e_used <= meminfo_used:  # zRAM not helping yet
+        e_used = meminfo_used
+        ratio = 2.75  # Conservative guess for projection when no data yet
+
+    if ratio is None:  # Calculate actual ratio
+        ratio = zram_orig_data_size / zram_mem_used_total if zram_mem_used_total > 0 else 2.75
+
+    # Apply memory limit if configured
+    if zram_mem_limit > 0:
+        stats_limit_pct = (zram_mem_limit / meminfo_total) * 100
+        limit_pct = min(100.0, limit_pct, stats_limit_pct)
+
+    # Calculate usage fraction and apply degradation
+    usage_fraction = zram_orig_data_size / zram_disksize if zram_disksize > 0 else 0
+
+    # Degradation logic based on current usage
+    if usage_fraction < 0.10:
+        degradation_factor = 0.75  # Aggressive: little real data
+        confidence = "low"
+    elif usage_fraction < 0.50:
+        degradation_factor = 0.85  # Moderate: some real data
+        confidence = "medium"
+    else:
+        degradation_factor = 0.95  # Conservative: lots of real data
+        confidence = "high"
+
+    projected_ratio = ratio * degradation_factor
+
+    # Project maximum effective memory when zRAM fills to limit
+    e_max_used = projected_ratio * meminfo_total * limit_pct / 100
+    # Cap by disksize limit
+    e_max_used = min(e_max_used, zram_disksize)
+    # Add uncompressed memory not in zRAM
+    e_max_used += meminfo_total - e_max_used / projected_ratio
+
+    # Calculate effective available
+    e_avail = e_max_used - e_used
+
+    return SimpleNamespace(
+        e_used=e_used,
+        e_avail=e_avail,
+        e_max_used=e_max_used,
+        ratio_current=ratio,
+        ratio_projected=projected_ratio,
+        projection_confidence=confidence,
+        usage_fraction=usage_fraction
+    )
+
+##############################################################################
 class ZramAdvisor:
     """ Workhorse class for zram-advisor """
     def __init__(self):
@@ -275,7 +358,7 @@ class ZramAdvisor:
         return ns
 
     def compute_effective(self):
-        """ Compute the effective values """
+        """ Compute the effective values wrapper - calls portable function """
         def dump_effective(ns, annotation=''):
             nonlocal self
             for key, value in vars(ns).items():
@@ -284,6 +367,8 @@ class ZramAdvisor:
         if not self.devs:
             return None
         meminfo = self.meminfo
+
+        # Aggregate stats from all zRAM devices
         stats = None
         for stat in self.devs.values():
             # NOTE: generalization for more than one weak unless all
@@ -295,65 +380,24 @@ class ZramAdvisor:
                 stats[key] += value
         stats = SimpleNamespace(**stats)
 
-        ns = SimpleNamespace(
-                e_used=meminfo.MemUsed,
-                e_avail=meminfo.MemAvailable,
-                e_total=meminfo.MemTotal,
-                e_max_used=meminfo.MemTotal,
-                stats=stats,
-                usage_fraction=None,
-                ratio_current=None,
-                ratio_projected=None,
-                projection_confidence=None,
-            )
-        e_used = meminfo.MemUsed - stats.mem_used_total + stats.orig_data_size
-        ratio = None
-        if e_used <= ns.e_used: # zram hurts. assume not enuf data to project
-            e_used = ns.e_used
-            ratio = 2.75 # somewhat conservative wild guess for projection
-        ns.e_used = e_used
-        limit_pct = self.limit_pct
-        if stats.mem_limit > 0:
-            stats_limit_pct = (stats.mem_limit / meminfo.MemTotal)*100
-            limit_pct = min(100.0, limit_pct, stats_limit_pct)
-            # projected amount of orig used memory that fits in limit
-        if ratio is None: # hopefully about 4 ;-)
-            ratio = stats.orig_data_size / stats.mem_used_total
-        # Calculate how much of disksize is currently used
-        usage_fraction = stats.orig_data_size / stats.disksize if stats.disksize > 0 else 0
-        
-        # Degradation logic:
-        # - Low usage (<10%): High uncertainty, use aggressive degradation (0.75x)
-        # - Medium usage (10-50%): Moderate degradation (0.85x)  
-        # - High usage (>50%): Data is reliable, minimal degradation (0.95x)
-        if usage_fraction < 0.10:
-            degradation_factor = 0.75  # Aggressive: little real data
-            confidence = "low"
-        elif usage_fraction < 0.50:
-            degradation_factor = 0.85  # Moderate: some real data
-            confidence = "medium"
-        else:
-            degradation_factor = 0.95  # Conservative: lots of real data
-            confidence = "high"
-        
-        projected_ratio = ratio * degradation_factor
-        
-        # Store both ratios in namespace for reporting
-        ns.ratio_current = ratio
-        ns.ratio_projected = projected_ratio
-        ns.projection_confidence = confidence
-        ns.usage_fraction = usage_fraction
-        
-        # Use projected ratio for future projections
-        e_max_used = projected_ratio * meminfo.MemTotal * limit_pct/100
-            # now limit by disksize
-        e_max_used = min(e_max_used, stats.disksize)
-            # now add uncompressed memory
-        e_max_used += meminfo.MemTotal - e_max_used/projected_ratio
-        ns.e_max_used = e_max_used
-        ns.e_avail = e_max_used - e_used
-        if self.DB: dump_effective(ns)
-        return ns
+        # Call the portable computation function
+        result = compute_zram_effective(
+            meminfo_total=meminfo.MemTotal,
+            meminfo_used=meminfo.MemUsed,
+            meminfo_available=meminfo.MemAvailable,
+            zram_orig_data_size=stats.orig_data_size,
+            zram_mem_used_total=stats.mem_used_total,
+            zram_disksize=stats.disksize,
+            zram_mem_limit=stats.mem_limit,
+            limit_pct=self.limit_pct
+        )
+
+        # Add stats for backward compatibility
+        result.stats = stats
+
+        if self.DB:
+            dump_effective(result)
+        return result
 
 
     def show_system_summary(self, once=False):
