@@ -1,41 +1,51 @@
-# zram-advisor: Check/Setup/Test zRAM Tool
-`zram-advisor` can:
-* Check on your running zRAM and report ill advised settings and zRAM effectiveness.
-* Install `fix-zram` which can setup your zRAM and/or reload it with different parameters (e.g., for testing).
-* Provide a browser bookmark file to be imported to help testing your settings.
+## zram-advisor: Check/Test/Setup zRAM Tool
 
-> **Quick-start**:
-* If running python 5.11+, install `pipx`, and install with `pipx install zram-advisor`
-* else install `pip`, and install with `pip install zram-advisor --user`
-* `zram-advisor` - reports on currently running zRAM 
-  * **Unless it reports "NO zRAM"**, then remove your current zRAM solution
-    before calling with `--setup-fix-zram`.
-* `zram-advisor --setup-fix-zram 2x 15g` - configures/starts zRAM w zRAM limit of the lesser
-   of 2x RAM or 15GiB (vary to please or omit to take default of 1.75x 12g).
-  **If unsure of zRAM effectiveness or best parameters, delay setup until zRAM is tested (read further).**
+`zram-advisor` helps you evaluate, tune, and configure zRAM (compressed swap in RAM) for Linux systems. zRAM can effectively expand your usable memory by compressing swap data, often achieving 3-4x compression ratios. Thus, a 8GB system might behave similar as if it had 16GB with favorable loads.
 
-> **But, to first test whether zRAM works for well and, if so, make it permanent:**
-* Load tested amount: `zram-advisor --load 3x 12g` -- configures zRAM as the minimum of 3xPhysicalRAM
-  or (vary as you wish).
-* Test with your heaviest system work load (or possibly use the `--gen-test-sites` option below
-  to assist creating an artificial load).
-* To remove if disappointed with zRAM:
-  * run `zram-advisor --unload` or simply reboot.
-  * remove `zram-advisor` with `pipx uninstall zram-advisor`.
-* If your tested zRAM params work well, make it permanent with:
-  * `zram-advisor --setup-fix-zram 2x 12g` - installs `fix-zram`, loads zRAM per
-    your given parameters, and installs a systemd service to load on each start.
-  * `fix-zram --setup 3x 20g` - to set non-default values (vary to please).
+**What zram-advisor does:**
+- **Evaluate**: Monitor your current zRAM effectiveness with real-time stats and projections
+- **Tune**: Test different zRAM configurations without making permanent changes
+- **Make Permanent**: Install and configure zRAM to load automatically on boot
 
-> **Removal Steps -- More than 'pipx uninstall' may be needed.**
-  1. if `--setup-fix-zram` was done, run `fix-zram --unsetup`
-     to remove itself from `/user/local/bin` and to remove its systemd service
-  2. run `pipx uninstall zram-advisor`
-    
+#### ⯈ How to Install zRAM-advisor
 
-## Checking Your Running zRAM
-#### Checking with zram-advisor
-Here is the sample output of `zram-advisor` w/o arguments on a system with zRAM running:
+Install using `pipx` (Python 3.11+) or `pip`:
+- `pipx install zram-advisor         # Preferred method`
+- `pip install zram-advisor --user   # Alternative`
+
+#### ⯈  Your First Run
+
+Simply run `zram-advisor` to see your current zRAM status. If you see "NO zRAM", you'll need to either:
+- Load zRAM temporarily for testing: `zram-advisor --load 2x 12g`
+- Set up zRAM permanently: `zram-advisor --setup-fix-zram 2x 12g`
+
+**Note:** Before setting up zRAM, remove any existing zRAM solution (e.g., `zram-config`, `zramswap`) to avoid conflicts.
+
+#### ⯈ What zram-advisor Can Do For You
+
+- **Evaluate:** Run `zram-advisor` (no arguments) to see live updating stats showing:
+  - Current compression ratios (algorithm efficiency vs real-world including overhead)
+  - Projected effectiveness when zRAM fills up
+  - Effective memory (how much uncompressed memory you're actually using)
+  - Kernel parameters and whether they're optimal
+
+- **Tune:** Test different configurations without permanent changes:
+  - `zram-advisor --load 3x 12g # Load zRAM with 3x RAM capacity, max 12GB`
+  - `zram-advisor # Run your workload, then check effectiveness`
+  - `zram-advisor --load 2x 15g # Not happy? Try different settings`
+  - `zram-advisor --unload  # or just reboot # Remove test configuration`
+
+- **Make Permanent:** Once you've found settings that work well:
+  - `zram-advisor --setup-fix-zram 2x 12g # Install fix-zram and create systemd service`
+  - `fix-zram --setup 3x 15g # Later, adjust if needed`
+
+---
+## How to Evaluate zRAM Effectiveness
+
+#### ⯈ Interpreting the Output
+
+When you run `zram-advisor`, you'll see output like this:
+
 ```
 13:24:48  Distro : Ubuntu 24.04.2 LTS
              180 : vm.swappiness.................. in [150, 200]
@@ -51,90 +61,196 @@ Here is the sample output of `zram-advisor` w/o arguments on a system with zRAM 
             cmpr : 607.3M/8% 4.34:1 eff=4.23:1 → 3.60:1 (confident)
              RAM : 623.1M/8% most=941M/12% limit=0
 ```
-* The top section shows key parameters for zRAM and suggested ranges (if it did not like those it would preface the range with "NOT in")
-* The midsection shows traditional key memory stats on the left, and on the right, the "effective values":
-  * **eUsed**: amount of memory used if the compressed part in zRAM were expanded.
-    *In this example, we have more memory in use than we have physical RAM (thanks to compression).*
-  * **eTotal** and **eAvail**: projected "effective" numbers based on the current compression ratio; these become more accurate as the zRAM memory footprint increases. *In this example, in effect, we have 2.2G memory (not 952.4M) and the "available" RAM is nearly as much as physical RAM (although also using more RAM than physical RAM)*.
-* The lower section are stats for each zram device .. typically, there is just one.
-    * **uncmpr**: amount of "original" memory stored by zRAM; its "limit" value is officially called 'disksize' which is the name/value you see from `zramctl`.
-    * **cmpr**: compressed data size and compression metrics:
-      * **factor**: pure compression ratio (how well the algorithm compressed: 2.6G→607.3M = 4.34:1)
-      * **effective**: real-world ratio including zRAM's metadata overhead (623.1M actual RAM used for 2.6G data = 4.23:1)
-      * **projected**: expected ratio when zRAM fills up, accounting for compression degradation as memory diversifies (3.60:1)
-      * **confidence**: reliability of projection based on current usage (uncertain <10%, confident 10-50%, certain >50% of disksize)
-    * **RAM**: amount of physical RAM consumed by zRAM including overhead; **most**: largest RAM used since boot.
-    
-#### Checking with pmemstat
-Another app (installable with `pipx` or `pip`) is `pmemstat`. The top of its sample output (on the same system as above) was:
-```
-10:54:02 Tot=7.6G Used=5.6G Avail=2.1G Oth=0 Sh+Tmp=630.3M PIDs=166
-     2.8%/ker MajF/s=21  zRAM=553.6M CR=4.4 eTot:16.4G eUsed:7.4G eAvail:9.0G
- cpu_pct   pswap   other    data  ptotal   key/info (exe by mem)
-    52.9   1,960     644   3,419   6,023 T 165x --TOTALS in MB --
-───────────────────────────────────────────────────────────────────────────────
-     2.5     781      77     932   1,789   19x browser
-```
-* You can see those same "effective" key memory stats, plus you can see:
-  *  kernel cpu% (i.e., the `0.6/ker`). Kernal CPU (most the swap process) can be significant, and that CPU cost is the primary "cost" of using zRAM.
 
-## zram-advisor Options
+**Top section** - Kernel parameters and their recommended ranges:
+- Lines show actual values and whether they're in acceptable ranges
+- "NOT in" prefix means a parameter is outside recommended values
+- `disksize` is the maximum uncompressed data zRAM will accept
+
+**Middle section** - Memory statistics with "effective" projections:
+- **Total Memory**: Physical RAM installed
+- **eTotal**: Projected total effective memory at full zRAM capacity (214% of physical in this example)
+- **Used**: Currently used physical RAM
+- **eUsed**: Effective memory used if compressed data were expanded (107% of physical - you're using more than your physical RAM thanks to compression!)
+- **Available**: Remaining available physical RAM
+- **eAvail**: Projected effective memory available
+
+**Bottom section** - Per-device zRAM statistics (usually just zram0):
+- **uncmpr**: Uncompressed data stored in zRAM (2.6G out of 12G limit)
+- **cmpr**: Compressed data details:
+  - `607.3M/8%`: Actual compressed size and percentage of disksize used
+  - `4.34:1`: Pure compression ratio (algorithm efficiency: 2.6G→607.3M)
+  - `eff=4.23:1`: Effective ratio including zRAM metadata overhead (623.1M actual RAM for 2.6G data)
+  - `→ 3.60:1 (confident)`: Projected ratio when zRAM fills, with confidence level
+    - `uncertain`: <10% of disksize used - projection unreliable
+    - `confident`: 10-50% used - good confidence
+    - `certain`: >50% used - high confidence
+- **RAM**: Physical RAM consumed by zRAM
+  - `623.1M/8%`: Current usage and percentage of physical RAM
+  - `most=941M/12%`: Peak usage since boot
+  - `limit=0`: No configured limit (0 means unlimited)
+
+#### ⯈ Judging zRAM Effectiveness
+
+**✅ zRAM is working well when:**
+- Compression ratio (eff) is **≥3:1** - good compression efficiency
+- eTotal is **≥150%** of physical RAM - significant memory expansion
+- eUsed is **>100%** of physical RAM - you're using more memory than you physically have
+- Confidence is **"confident"** or **"certain"** - projections are reliable
+- Kernel parameters show **"in"** ranges (not "NOT in")
+- Kernel CPU overhead is low (check with `pmemstat` if available, look for <5% kernel CPU)
+
+**❌ zRAM may not be worthwhile when:**
+- Compression ratio is **<2:1** - poor compression, not worth the CPU overhead
+- eTotal is **<120%** of physical RAM - minimal memory gain
+- You see **"NOT in"** warnings for kernel parameters - suboptimal configuration
+- Kernel CPU is consistently **>10%** - swap overhead is too high
+- `uncmpr` frequently hits the `limit` (disksize) - need larger disksize
+- RAM usage hits `limit` - need to increase mem_limit or reduce disksize multiplier
+
+**🔧 What to change when zRAM isn't performing well:**
+
+| Problem | Solution |
+|---------|----------|
+| Compression ratio <2:1 | Your workload may not compress well - consider not using zRAM |
+| Hitting disksize limit | Increase the size limit: `--load 3x 15g` (was 2x 12g) |
+| High kernel CPU (>10%) | Reduce zRAM usage or reconsider if benefit outweighs cost |
+| Kernel params "NOT in" | zram-advisor sets these automatically with `--load` or `--setup-fix-zram` |
+| Confidence is "uncertain" | Load more data into zRAM to get reliable projections |
+| RAM limit being hit | Increase the multiplier (e.g., 3x instead of 2x) |
+
+---
+
+## How to Tune zRAM with zram-advisor
+
+Follow this workflow to find optimal zRAM settings:
+
+1. **Load zRAM with Test Configuration**
+    - Start with a conservative configuration: `zram-advisor --load 2x 12g`
+    - This configures zRAM to use at most 2x your physical RAM or 12GB, whichever is smaller.
+
+2. **Generate System Load.** Load your system either:
+    - **Normally:** Run your typical heavy workload (multiple browsers, IDEs, virtual machines, etc.)
+    - **Artificially:**
+      - Use the bookmark generator:
+        - `zram-advisor --gen-test-sites > test-sites.html`
+
+      - Import into your browser, then open multiple bookmark folders
+      -  Disable any memory-saving browser extensions for accurate testing
+
+3. **Evaluate Performance.**
+    - While the system is loaded, run: `zram-advisor`
+    - Watch the live updating stats.
+    - Let it run for several minutes to collect data.
+
+4. **Adjust and Repeat.** Based on the results:
+    - **If compression is good (≥3:1) but hitting disksize limit:**
+      - Increase size `zram-advisor --load 3x 15g`
+    - **If RAM usage is high but disksize isn't filling:**
+      - Reduce multiplier: `zram-advisor --load 1.5x 10g`
+    - **If compression is poor (<2:1):**
+      - zRAM may not help your workload - consider not using it
+
+5. **Verify Stability**
+    - Once you find good settings, run with them for a day or two before making permanent.
+
+6. **Remove Test Configuration**
+    - When done testing: `zram-advisor --unload  # or just reboot`
+
+---
+
+## How to Make zRAM Permanent
+
+Once you've found good settings, make them permanent; e.g.,:
+ - `zram-advisor --setup-fix-zram 2x 12g`
+
+This will:
+1. Install `fix-zram` to `/usr/local/bin/`
+2. Create `fix-zram-init.service` to load zRAM on boot
+3. Load zRAM immediately with your specified settings
+
+#### ⯈ Adjusting Permanent Settings
+
+To change settings after installation, repeat with new args; e.g.:
+  - `fix-zram --setup-fix-ram 3x 15g`
+
+#### ⯈ Advanced: Customizing Fixed Parameters
+
+The following parameters are set automatically but cannot be changed via command line:
+- `vm.swappiness=180` - Aggressiveness of swap usage
+- `vm.watermark_boost_factor=0` - Memory reclaim behavior
+- `vm.watermark_scale_factor=125` - When to start reclaiming memory
+- `vm.page-cluster=0` - Pages to swap at once (0=single pages for compressed swap)
+
+To modify these, edit the script: `sudo nano /usr/local/bin/fix-zram`
+  - **Warning:** Re-running `zram-advisor --setup-fix-zram` overwrites your customizations.
+
+#### ⯈ Removing zRAM Permanently
+
+To completely remove zRAM:
+
+1. Remove the fix-zram service and script: `fix-zram --unsetup`
+2. Uninstall zram-advisor: `pipx uninstall zram-advisor`
+
+---
+
+## Reference
+
+#### ⯈ Command Reference
+
 ```
-usage: zram-advisor [-h] [-s] [-d] [-t] [--DB] [args ...]
+usage: zram-advisor [-h] [-s] [-d] [-t] [-L] [-U] [--DB] [args ...]
+
 options:
-  -s, --setup-fix-zram  install "fix-zram" program and start zRAM
-  -d, --dump-fix-zram   print "fix-zram.sh" for manual install
-  -t, --gen-test-sites  print "bookmarks.html" to import to a web-browser for load test
-  -L, --load            run "fix-zram --load [args ...]>" to test zRAM w/o any footprint
-  -U, --unload          run "fix-zram --unload" to remove zRAM test
-<
+  -h, --help            show this help message
+  -s, --setup-fix-zram  install fix-zram and create systemd service
+  -d, --dump-fix-zram   print fix-zram.sh script for manual installation
+  -t, --gen-test-sites  generate bookmarks.html for browser load testing
+  -L, --load [args]     load zRAM temporarily for testing (e.g., 2x 12g)
+  -U, --unload          unload temporary zRAM configuration
+  --DB                  debug mode
+
+args format:
+  {float}x              multiply physical RAM by this factor (default: 1.75)
+  {integer}g|m          maximum size in gigabytes or megabytes (default: 12g)
+
+examples:
+  zram-advisor                    # monitor current zRAM
+  zram-advisor --load 3x 15g      # test with 3xRAM, max 15GB
+  zram-advisor --setup-fix-zram 2x 12g  # make permanent
 ```
-* **--setup-fix-zram** installs a programs `fix-ram` and creates a service called `fix-zram-init` to run it on boot.
-* **--dump-fix-zram** prints the stock `fix-zram.sh` (e.g., so you can modify it) and install your modified script by running it (e.g., `bash my-fix-zram.sh`).
-* **--gen-test-sites** prints a .html to imported into (most) browsers; then open folders of sites to manufacture memory demand (of browsers at least); disable memory saving options and extensions to be most effective.
 
-**Notes:**
-* do not install `fix-zram` if w/o uninstalling any competing tool to configure zRAM.
-* `systemd` is required for loading zRAM per your specs on boot.
+#### ⯈ fix-zram Command Reference
 
-## Controlling zRAM with fix-zram
-`fix-zram` is bash script bundled with `zram-advisor`. Its usage is:
+The `fix-zram` script is installed by `--setup-fix-zram`:
+
 ```
-fix-zram [--(load|unload|setup|unsetup)] [-n|--dry-run] [-cN] [N.Nx] [Nm|Ng]
-where:
-  --{command} defaults to 'load' but can be one of:
-          load      - remove any existing zRAM and load zRAM with optional params
-          unload    - unloads any existing zRAM
-          setup     - copy fix-zram to '/usr/local/bin' and setup service [dflt=no]
-          unsetup   - remove '/usr/local/bin/fix-zram' and remove service [dflt=no]
-  -n,--dry-run  - only print commands that would be executed
-  -c{integer}   - set number of zram devices
-  {float}x      - set zram-size to {float} * ram at most [dflt=1.75]
-  {integer}m    - set gross zram-size to {integer} megabytes at most [dflt=12288m]
-  {integer}g    - set gross zram-size to {integer} gigabytes at most
-Currently fixed values are:
-    vm.swappiness=180
-    vm.watermark_boost_factor=0
-    vm.watermark_scale_factor=125
-    vm.page-cluster=0
-    zRam-swap-priority=100
+fix-zram [--(load|unload|setup|unsetup)] [-n|--dry-run] [args ...]
+
+commands:
+  --load       load zRAM with specified parameters (temporary, until reboot)
+  --unload     unload current zRAM (fails if memory can't be swapped out)
+  --setup      install to /usr/local/bin and create systemd service
+  --unsetup    remove installed script and systemd service
+
+options:
+  -n, --dry-run  show commands without executing
+
+examples:
+  fix-zram --load 3x 12g     # test configuration
+  fix-zram --setup 2x 15g    # make permanent
+  fix-zram --unsetup         # remove everything
 ```
-### fix-zram Run-Time Commands
-`load`  and `unload` affect the running system but the effects do not survive reboot. So, these can be used for trialing zRAM.
-* `load` sets the `vm.*` parameters shown by `zram-advisor`.
-* `unload` and `load` remove preexisting zRAM if running. Removal only works if all memory stored in zRAM can be placed in RAM or another swap device.
 
-Typical use:
-* `fix-zram --load 3x 12g` - will unload the current zRAM (if exists and possible), and then install zRAM with sized at the minimum of 3x RAM and 12GB.
+#### ⯈ Everyday Monitoring with pmemstat
 
-### fix-zram Setup Methods
-* `fix-zram --setup` - installs `fix-zram` and creates a `zram-init-fix` service which will load zRAM per the defaults on each load with default values.
-* `fix-zram --unsetup` - removes the  installed `fix-zram` and removes the `zram-init-fix` service.
+For day-to-day memory monitoring, consider installing `pmemstat`, which shows zRAM stats alongside process memory usage:
+- install: `pipx install pmemstat`
+- usage: `pmemstat`
 
-Typical use:
-* `fix-zram setup 3x 12g` - installs a zRAM init service that start zRAM sized at the minimum of 3xRAM and 12GB on boot.
+Output includes effective memory stats and kernel CPU overhead, helping you monitor the ongoing cost/benefit of zRAM.
 
-> The "fixed values" (shown in the usage section above) cannot be varied on the command line,
-> but they are reasonable values w/o fretting much.
-> If unacceptable, run `sudo nano /usr/local/bin/fix-zram` and adjust the values at the top of the script;
-> be aware that another `zram-advisor --setup-fix-zram` will overwrite your changes.
+---
+
+**Project:** [https://github.com/joedefen/zram-advisor](https://github.com/joedefen/zram-advisor)
+**Issues:** [https://github.com/joedefen/zram-advisor/issues](https://github.com/joedefen/zram-advisor/issues)
