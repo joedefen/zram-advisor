@@ -11,7 +11,7 @@ factor=1.75
 capM=$((12*1024))  # the default cap on zRAM
 count=1
 dry_run=no
-command=start
+command=load
 
 usage() {
     echo "$@"
@@ -47,8 +47,10 @@ fi
 
 ########################################################
 # Iterate over command-line arguments
-shopt -s extglob # permit patterns like *(-)
+# (no extglob needed: normalize leading dashes, then match the bare token)
 for arg in "$@"; do
+    token="${arg#-}"   # allow -, --, or no dash
+    token="${token#-}"
     case "$arg" in
         [0-9]*[xX]|[0-9]*.[0-9]*[xX])
             factor="${arg%?}"
@@ -60,17 +62,18 @@ for arg in "$@"; do
             capG="${arg%?}"
             capM=$((capG*1024))
             ;;
-        *(-)c[0-9]*)
-            count="${arg##*c}"
-            ;;
-        *(-)load)       command=reload ;;
-        *(-)reload)     command=reload ;;
-        *(-)unload)     command=unload ;;
-        *(-)setup)      command=setup ;;
-        *(-)unsetup)    command=unsetup ;;
         -n|--dry-run)   dry_run=yes ;;
         -h|--help|-\?) usage ;;
-        *) usage "Unknown option: $arg"  ;;
+        *)
+            case "$token" in
+                c[0-9]*)     count="${token##*c}" ;;
+                load|reload) command=reload ;;
+                unload)      command=unload ;;
+                setup)       command=setup ;;
+                unsetup)     command=unsetup ;;
+                *)           usage "Unknown option: $arg" ;;
+            esac
+            ;;
     esac
 done
 
@@ -235,7 +238,7 @@ unsetup_sysVinit() {
     if which update-rc.d >/dev/null 2>&1; then
         run "update-rc.d -f ${service} remove"
     fi
-    run "rm /var/log/${service}.log"
+    run "rm -f /var/log/${service}.log"
 }
 
 ########################################################
@@ -264,7 +267,7 @@ unsetup() {
       systemd) ( unsetup_systemd ) ;;
       *) echo unhandled init type "$init_cmd" ;;
     esac
-    ( set -x; rm $script_bin_path)
+    run "rm -f '$script_bin_path'"
 }
 
 if [[ $command == 'setup' ]]; then

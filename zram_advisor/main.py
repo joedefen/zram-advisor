@@ -14,29 +14,21 @@ Tested on:
  - Debian (KDE) 12.4.0
  - Linux Lite 6.6 - 5.x kernel
  - elementary OS 7.1 Horus
-
-
-- Add compression ratio degradation - multiply ratio by 0.85 or so for projections
-- Add warnings when:
-  - Projection based on < 10% zRAM usage (unreliable)
-  - Compression ratio is below 2.0 (zRAM may not be worth it)
-    disksize is limiting more than RAM would (misconfiguration)
-Consider documenting the formula more clearly - it's clever but dense
 """
 # pylint: disable=invalid-name,multiple-statements,global-statement
 # pylint: disable=too-many-instance-attributes,broad-exception-caught
 # pylint: disable=too-many-locals
 
-import re
-from types import SimpleNamespace
-import shutil
-import os
-import sys
-import traceback
-import configparser
-import time
 import argparse
+import configparser
+import os
+import re
 import subprocess
+import sys
+import tempfile
+import time
+import traceback
+from types import SimpleNamespace
 
 ##############################################################################
 
@@ -83,7 +75,7 @@ def human(number):
     return 'TooHuge'
 
 ##############################################################################
-def compute_zram_effective(meminfo_total, meminfo_used, meminfo_available,
+def compute_zram_effective(meminfo_total, meminfo_used,
                           zram_orig_data_size, zram_mem_used_total,
                           zram_disksize, zram_mem_limit=0, limit_pct=80):
     """
@@ -95,7 +87,6 @@ def compute_zram_effective(meminfo_total, meminfo_used, meminfo_available,
     Args:
         meminfo_total: Total physical RAM in bytes
         meminfo_used: Currently used RAM in bytes
-        meminfo_available: Available RAM in bytes
         zram_orig_data_size: Uncompressed data size stored in zRAM (bytes)
         zram_mem_used_total: Physical RAM consumed by zRAM including overhead (bytes)
         zram_disksize: Max uncompressed data zRAM will accept (bytes)
@@ -171,13 +162,10 @@ class ZramAdvisor:
     def __init__(self):
         self.meminfo = None #selected info from meminfo
         self.effective = None # effective system params
-        self.probe = None  # info about runnable programs
         self.devs = None # info about zram devices
         self.params = None # related kernel parameters
         self.release = None
         self.ram_total = 0
-        self.tab_count = 0  # number of tabs created so far
-        self.download_dir = os.path.expanduser('~/Downloads')
         self.script_dir = os.path.dirname(os.path.realpath(__file__))
         # options:
         self.DB = False
@@ -210,38 +198,14 @@ class ZramAdvisor:
                 keys.remove(key)
                 if not keys:
                     break
-        assert not keys, f'ALERT: cannot get vitals ({keys}) from {meminfofile}'
+        if keys:
+            raise RuntimeError(
+                f'ALERT: cannot get vitals ({keys}) from {meminfofile}')
         ns = SimpleNamespace(**meminfo)
         ns.MemUsed = ns.MemTotal - ns.MemAvailable # synthetic
         if self.DB: print(f'DB: meminfo: {ns}')
         if self.DB: print(f'DB: RAM={human(ns.MemTotal)}')
         self.ram_total = ns.MemTotal
-        return ns
-
-    @staticmethod
-    def keyword_in_manpage(manpage, keyword):
-        """ Is a given keyword in the man page?"""
-        try:
-            # Use subprocess to run the man command and grep for the keyword
-            command = f"man {manpage} | grep -q '{keyword}'"
-            subprocess.run(command, shell=True, check=True)
-            return True
-        except subprocess.CalledProcessError:
-            return False
-
-    def prober(self):
-        """ Probe for distro specific attributes """
-        def has(program): # is program on path?
-            return shutil.which(program) is not None
-
-
-        ns = SimpleNamespace(installer=None)
-        ns.fraction_str = ''
-
-        others = ('zramctl', )
-        for other in others:
-            setattr(ns, other, has(other))
-        if self.DB: print(f'DB: probe: {ns}')
         return ns
 
     def load_script(self):
@@ -252,14 +216,22 @@ class ZramAdvisor:
         return script
 
     def run_script(self, keyword, arguments=None):
-        """ Dump 'fix-zram' into /tmp and run it."""
+        """ Dump 'fix-zram' into a private temp file and run it as root."""
         script = self.load_script()
-        pathname = os.path.join('/tmp', 'fix-zram.sh')
-        with open(pathname, "w", encoding='utf-8') as fh:
-            fh.write(script)
-        os.chmod(pathname, 0o755)
-        arguments = [] if arguments is None else arguments
-        os.system(f'set -x; sudo bash {pathname} --{keyword} {" ".join(arguments)}')
+        fd, pathname = tempfile.mkstemp(prefix='fix-zram-', suffix='.sh')
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as fh:
+                fh.write(script)
+            os.chmod(pathname, 0o700)
+            arguments = [] if arguments is None else list(arguments)
+            subprocess.run(
+                ['sudo', 'bash', pathname, f'--{keyword}', *arguments],
+                check=False)
+        finally:
+            try:
+                os.remove(pathname)
+            except OSError:
+                pass
 
     def create_site_import(self):
         """ Get a randomly chosen site """
@@ -384,7 +356,6 @@ class ZramAdvisor:
         result = compute_zram_effective(
             meminfo_total=meminfo.MemTotal,
             meminfo_used=meminfo.MemUsed,
-            meminfo_available=meminfo.MemAvailable,
             zram_orig_data_size=stats.orig_data_size,
             zram_mem_used_total=stats.mem_used_total,
             zram_disksize=stats.disksize,
@@ -400,7 +371,7 @@ class ZramAdvisor:
         return result
 
 
-    def _build_display_lines(self, delta_seconds):
+    def _build_display_lines(self):
         """Build the display lines for both console-window and print output"""
         lines = []
         meminfo = self.meminfo
@@ -468,7 +439,7 @@ class ZramAdvisor:
 
         # For once mode, just print and exit
         if once:
-            lines = self._build_display_lines(0)
+            lines = self._build_display_lines()
             for line in lines:
                 print(line)
             return
@@ -482,18 +453,16 @@ class ZramAdvisor:
 
         win = ConsoleWindow(head_line=True,
                             ctrl_c_terminates=False, keys=[0x3])
-        start = time.time()
         time.sleep(2)  # Initial delay
 
         try:
             while True:
-                delta = int(round(time.time() - start))
-                lines = self._build_display_lines(delta)
+                lines = self._build_display_lines()
 
                 # Split into header (static) and body (dynamic)
-                # Header is: timestamp+distro, vm params (4), disksize = 6 lines
+                # Header is: timestamp+distro, vm params, disksize
                 # Body is: memory stats and zRAM device info
-                header_end = 6  # First 6 lines are static header
+                header_end = 2 + len(self.params)
 
                 win.clear()
                 for line in lines[:header_end]:
@@ -518,7 +487,7 @@ class ZramAdvisor:
             # (whether by keypress, ctrl+c, or exception)
             win.stop_curses()
             print("\nFinal snapshot:")
-            lines = self._build_display_lines(int(round(time.time() - start)))
+            lines = self._build_display_lines()
             for line in lines:
                 print(line)
             print()
@@ -534,7 +503,7 @@ class ZramAdvisor:
                 help='print "bookmarks.html" to import to a web-browser for load test')
         parser.add_argument('--DB', action="store_true",
                 help='debug creation of low-level objects/data')
-        parser.add_argument('-L', '--reload', action="store_true",
+        parser.add_argument('-L', '--reload', '--load', action="store_true",
                 help='run "fix-zram --reload [args ...]" to test zRAM w/o any footprint')
         parser.add_argument('-U', '--unload', action="store_true",
                 help='run "fix-zram --unload"')
@@ -555,7 +524,6 @@ class ZramAdvisor:
         def loop(once=False):
             nonlocal self
             self.meminfo = self.get_meminfo()
-            self.probe = self.prober()
             self.devs = self.get_zram_stats()
             self.params = self.get_vm_params()
             self.effective = self.compute_effective()

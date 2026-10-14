@@ -1,0 +1,21 @@
+#!/usr/bin/env python3
+"""
+runner - Development wrapper for zram-advisor
+Located in the top-level zram-advisor directory.
+Allows running zram-advisor from source for debugging with support for
+command-line arguments.
+
+Usage:
+    ./runner [-s|--setup-fix-zram] [-d|--dump-fix-zram] [-t|--gen-test-sites]
+    ./runner [-L|--reload|--load] [args ...] [-U|--unload] [--DB]
+    ./runner --help     (show all available options)
+"""
+
+import runpy
+import sys
+
+if __name__ == '__main__':
+    # Set program name but preserve all command-line arguments
+    sys.argv[0] = 'zram-advisor'
+    # Run the zram_advisor.main module with alter_sys=True to propagate sys.argv
+    runpy.run_module('zram_advisor.main', run_name='__main__', alter_sys=True)

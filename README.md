@@ -9,7 +9,7 @@
 
 #### ⯈ How to Install zRAM-advisor
 
-Install using `pipx` (Python 3.11+) or `pip`:
+Install using `pipx` (Python 3.10+) or `pip`:
 - `pipx install zram-advisor         # Preferred method`
 - `pip install zram-advisor --user   # Alternative`
 
@@ -172,7 +172,7 @@ This will:
 #### ⯈ Adjusting Permanent Settings
 
 To change settings after installation, repeat with new args; e.g.:
-  - `fix-zram --setup-fix-ram 3x 15g`
+  - `fix-zram --setup 3x 15g`
 
 #### ⯈ Advanced: Customizing Fixed Parameters
 
@@ -206,7 +206,7 @@ options:
   -s, --setup-fix-zram  install fix-zram and create systemd service
   -d, --dump-fix-zram   print fix-zram.sh script for manual installation
   -t, --gen-test-sites  generate bookmarks.html for browser load testing
-  -L, --load [args]     load zRAM temporarily for testing (e.g., 2x 12g)
+  -L, --reload/--load [args]  load zRAM temporarily for testing (e.g., 2x 12g)
   -U, --unload          unload temporary zRAM configuration
   --DB                  debug mode
 
