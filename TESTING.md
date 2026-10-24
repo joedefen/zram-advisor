@@ -181,7 +181,10 @@ zram-advisor --help
 zram-advisor --load --help >/dev/null && echo "ALIAS OK"
 ```
 
-Dev-wrapper alternative (no install needed): `./runner --help`.
+Dev-wrapper alternative (no install needed): `./runner --help`. The wrapper runs
+from the project's local `.venv`; create it once with
+`python3 -m venv .venv && .venv/bin/python -m pip install -e .` (it auto
+re-execs with `.venv/bin/python` when started from another interpreter).
 
 ---
 

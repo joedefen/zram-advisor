@@ -12,7 +12,7 @@ authors = [
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "console-window==1.4.3",
+    "console-window==2.0.0.9",
 ]
 keywords = ["zram", "zram service"]
 license = { text = "MIT" }

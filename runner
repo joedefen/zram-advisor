@@ -5,16 +5,67 @@ Located in the top-level zram-advisor directory.
 Allows running zram-advisor from source for debugging with support for
 command-line arguments.
 
+If a local virtual environment (./.venv) exists and this script was NOT
+started with that environment's interpreter, the runner re-executes itself
+using ./.venv/bin/python so that project dependencies (e.g., console-window)
+are available. The venv is created with:
+    python3 -m venv .venv
+    .venv/bin/python -m pip install -e .
+
 Usage:
     ./runner [-s|--setup-fix-zram] [-d|--dump-fix-zram] [-t|--gen-test-sites]
     ./runner [-L|--reload|--load] [args ...] [-U|--unload] [--DB]
     ./runner --help     (show all available options)
 """
 
+import os
 import runpy
 import sys
 
+# Guard against an infinite re-exec loop (e.g., broken/foreign venv).
+_REEXEC_ENV = 'ZRAM_ADVISOR_RUNNER_REEXEC'
+_VENV_DIR = '.venv'
+
+
+def _venv_python(project_dir):
+    """Return the path of the venv's python, or None if it is missing."""
+    candidate = os.path.join(
+        project_dir, _VENV_DIR, 'Scripts' if os.name == 'nt' else 'bin',
+        'python.exe' if os.name == 'nt' else 'python')
+    return candidate if os.path.exists(candidate) else None
+
+
+def _ensure_venv(project_dir):
+    """Re-exec with the project venv's python when appropriate."""
+    if os.environ.get(_REEXEC_ENV):
+        return  # already re-exec'd once; do not loop
+
+    venv_dir = os.path.join(project_dir, _VENV_DIR)
+    venv_python = _venv_python(project_dir)
+    if venv_python is None:
+        print(f'runner: no venv found at {venv_dir}; '
+              'running with the current interpreter', file=sys.stderr)
+        print('runner: create it with: python3 -m venv .venv && '
+              '.venv/bin/python -m pip install -e .', file=sys.stderr)
+        return
+
+    # Compare sys.prefix (not sys.executable) because the venv's python is
+    # usually a symlink to the very same system interpreter binary.
+    if os.path.realpath(sys.prefix) == os.path.realpath(venv_dir):
+        return  # already running inside the project venv
+
+    env = dict(os.environ)
+    env[_REEXEC_ENV] = '1'
+    try:
+        os.execve(venv_python, [venv_python, os.path.abspath(__file__), *sys.argv[1:]], env)
+    except OSError as exce:
+        print(f'runner: cannot re-exec with venv python ({exce}); '
+              'using current interpreter', file=sys.stderr)
+
+
 if __name__ == '__main__':
+    project_dir = os.path.dirname(os.path.realpath(__file__))
+    _ensure_venv(project_dir)
     # Set program name but preserve all command-line arguments
     sys.argv[0] = 'zram-advisor'
     # Run the zram_advisor.main module with alter_sys=True to propagate sys.argv
