@@ -446,13 +446,13 @@ class ZramAdvisor:
 
         # Use console-window for live updating display
         try:
-            from console_window import ConsoleWindow
+            from console_window import ConsoleWindow, ConsoleWindowOpts
         except ImportError:
             print("ERROR: console-window not installed. Install with: pip install console-window")
             sys.exit(1)
 
-        win = ConsoleWindow(head_line=True,
-                            ctrl_c_terminates=False, keys=[0x3])
+        win = ConsoleWindow(ConsoleWindowOpts(head_line=True,
+                            ctrl_c_terminates=False, keys=[0x3]))
         time.sleep(2)  # Initial delay
 
         try:
