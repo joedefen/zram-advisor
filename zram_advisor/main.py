@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Program to analyze the zRAM configuration (if any) and suggest
 some improvements.
@@ -29,6 +28,8 @@ import tempfile
 import time
 import traceback
 from types import SimpleNamespace
+
+from zram_advisor import __version__
 
 ##############################################################################
 
@@ -203,15 +204,17 @@ class ZramAdvisor:
                 f'ALERT: cannot get vitals ({keys}) from {meminfofile}')
         ns = SimpleNamespace(**meminfo)
         ns.MemUsed = ns.MemTotal - ns.MemAvailable # synthetic
-        if self.DB: print(f'DB: meminfo: {ns}')
-        if self.DB: print(f'DB: RAM={human(ns.MemTotal)}')
+        if self.DB:
+            print(f'DB: meminfo: {ns}')
+        if self.DB:
+            print(f'DB: RAM={human(ns.MemTotal)}')
         self.ram_total = ns.MemTotal
         return ns
 
     def load_script(self):
         """ Give the user the onboot script"""
         pathname = os.path.join(self.script_dir, 'fix-zram.sh')
-        with open(pathname, "r", encoding='utf8') as fh:
+        with open(pathname, encoding='utf8') as fh:
             script = fh.read()
         return script
 
@@ -236,7 +239,7 @@ class ZramAdvisor:
     def create_site_import(self):
         """ Get a randomly chosen site """
         random_site_file = os.path.join(self.script_dir, 'random-sites.txt')
-        with open(random_site_file, "r", encoding='utf8') as fh:
+        with open(random_site_file, encoding='utf8') as fh:
             sites = [line.rstrip('\n') for line in fh]
         rv = """<!DOCTYPE NETSCAPE-Bookmark-file-1>
 <META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">
@@ -284,7 +287,8 @@ class ZramAdvisor:
                     for line in fileh: # one value, one line
                         setattr(ns, param, int(line.strip()))
                         break
-            if self.DB: print(f'DB: {device}: {ns}')
+            if self.DB:
+                print(f'DB: {device}: {ns}')
 
         return infos
 
@@ -310,7 +314,8 @@ class ZramAdvisor:
             param_file = os.path.join(vm_dirname, param.name)
             with open(param_file, encoding='utf-8') as fileh:
                 param.value = int(fileh.readline().strip())
-        if self.DB: print(f'DB: vm.params: {params}')
+        if self.DB:
+            print(f'DB: vm.params: {params}')
         return params
 
     def get_name_value_info(self, pathname):
@@ -326,7 +331,8 @@ class ZramAdvisor:
         for section in parser.sections():
             for key, value in parser.items(section):
                 setattr(ns, key.lower(), value.replace('"', ''))
-        if self.DB: print(f'DB: {os.path.basename(pathname)}: {ns}')
+        if self.DB:
+            print(f'DB: {os.path.basename(pathname)}: {ns}')
         return ns
 
     def compute_effective(self):
@@ -495,6 +501,8 @@ class ZramAdvisor:
     def main(self):
         """ Do something useful. """
         parser = argparse.ArgumentParser()
+        parser.add_argument('-V', '--version', action='version',
+                version=f'zram-advisor {__version__}')
         parser.add_argument('-s', '--setup-fix-zram', action="store_true",
                 help='install/run "fix-zram --setup [args ...]" for persistent install')
         parser.add_argument('-d', '--dump-fix-zram', action="store_true",
@@ -514,11 +522,11 @@ class ZramAdvisor:
         try:
             self.release = self.get_name_value_info('/etc/os-release')
             self.release.marquee = self.release.pretty_name
-        except Exception:
+        except Exception:  # noqa: BLE001 - fall back to the old lsb-release file
             try:
                 self.release = self.get_name_value_info('/etc/lsb-release')
                 self.release.marquee = self.release.distrib_description
-            except Exception:
+            except Exception:  # noqa: BLE001 - no release file is not fatal
                 print("cannot get os-release or lsb-release")
 
         def loop(once=False):
@@ -552,7 +560,7 @@ def run():
     except KeyboardInterrupt:
         print('\n   OK, QUITTING NOW\n')
         sys.exit(0)
-    except Exception as exce:
+    except Exception as exce:  # noqa: BLE001 - the entry point reports, then exits 15
         print("exception:", str(exce))
         print(traceback.format_exc())
         sys.exit(15)

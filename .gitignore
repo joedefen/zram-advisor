@@ -1,4 +1,11 @@
+build/
 dist/
+htmlcov/
 __pycache__/
 *.egg-info/
 .venv/
+.pytest_cache/
+.ruff_cache/
+.coverage*
+*.whl
+*.tar.gz
