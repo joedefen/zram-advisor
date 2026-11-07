@@ -159,8 +159,8 @@ pipx list | grep -A1 zram-advisor
 
 ## Step 7 — Verify packaging metadata (the audit changes)
 
-Expect `Requires-Python: >=3.10`, `Requires: ['console-window==1.4.3']`, and
-`console-window: 1.4.3`.
+Expect `Requires-Python: >=3.10`, `Requires: ['console-window==2.2.2']`, and
+`console-window: 2.2.2`.
 
 ```bash
 VENV="$HOME/.local/share/pipx/venvs/zram-advisor"
@@ -245,7 +245,7 @@ swapon --show                    # EXPECT no zram
 
 - Steps 2–5 leave zero zRAM devices, zero fix-zram service/script, and no pipx
   entry for the old release.
-- Step 7 reports `>=3.10` and a pinned `console-window==1.4.3`.
+- Step 7 reports `>=3.10` and a pinned `console-window==2.2.2`.
 - Step 8 shows the `--load` alias.
 - Step 9's `-d`/`-t` outputs are well-formed, the no-zRAM run exits 1, and
   `--unsetup --dry-run` prints only `WOULD ++` lines and deletes nothing.
