@@ -20,6 +20,7 @@ Tested on:
 
 import argparse
 import configparser
+import curses
 import os
 import re
 import subprocess
@@ -29,36 +30,23 @@ import time
 import traceback
 from types import SimpleNamespace
 
+from console_window import (
+    ConsoleWindow,
+    ConsoleWindowOpts,
+    Glyphs,
+    Screen,
+    Theme,
+    resolve_appearance,
+    semantic_attr,
+)
+
 from zram_advisor import __version__
 
 ##############################################################################
 
-####################################################################################
-
-class Term:
-    """ Escape sequences; e.g., see:
-     - https://en.wikipedia.org/wiki/ANSI_escape_code
-     - https://gist.github.com/fnky/458719343aabd01cfb17a3a4f7296797#file-ansi-md
-    """
-    esc = '\x1B'
-    # pylint: disable=missing-function-docstring,multiple-statements
-    @staticmethod
-    def erase_line(): return f'{Term.esc}[2K'
-    @staticmethod
-    def bold(): return f'{Term.esc}[1m'
-    @staticmethod
-    def reverse_video(): return f'{Term.esc}[7m'
-    @staticmethod
-    def normal_video(): return f'{Term.esc}[m'
-    @staticmethod
-    def pos_up(cnt): return f'{Term.esc}[{cnt}F' if cnt > 0 else ''
-    @staticmethod
-    def pos_down(cnt): return f'{Term.esc}[{cnt}E' if cnt > 0 else ''
-    @staticmethod
-    def col(pos): return f'{Term.esc}[{pos}G'
-    @staticmethod
-    def clear_screen(): return f'{Term.esc}[H{Term.esc}[2J{Term.esc}[3J'
-
+#: Keys the live monitor returns; `relax_handled_keys` (the 3.x default) also
+#: lets any non-navigation key through, so this is the documented quit set.
+QUIT_KEYS = (0x3, ord('q'), ord('Q'))
 
 ##############################################################################
 def human(number):
@@ -171,6 +159,10 @@ class ZramAdvisor:
         # options:
         self.DB = False
         self.limit_pct = 80 # arbitrary limit on amount of RAM used by zRAM
+        # Test seams (the 3.x recipe's trap 8): a HeadlessBackend here, and
+        # `singleton=False` so a test window never latches the process model.
+        self.window_backend = None
+        self.window_singleton = True
 
     def human_pct(self, number):
         """ Return the number in human form and as pct total memory. """
@@ -377,12 +369,15 @@ class ZramAdvisor:
         return result
 
 
-    def _build_display_lines(self):
-        """Build the display lines for both console-window and print output"""
-        lines = []
-        meminfo = self.meminfo
-        eff = self.effective
+    def disksize_target(self):
+        """The smallest disksize worth configuring for this much RAM."""
+        GB = 1024*1024*1024
+        ram = self.meminfo.MemTotal
+        return 1.5*ram if ram <= 8*GB else 4*GB
 
+    def header_lines(self):
+        """The static band: release, kernel parameters and the disksize check."""
+        lines = []
         # Header section - add HH:MM:SS timestamp in top left corner
         timestamp = time.strftime("%H:%M:%S")
         lines.append(f'{timestamp:<8}{"Distro":>8} : {self.release.marquee}')
@@ -391,27 +386,53 @@ class ZramAdvisor:
             lines.append(f'{param.value:>16} : vm.{param.name.ljust(24, ".")}'
                         f'{ok} in [{param.least}, {param.most}]')
 
-        GB = 1024*1024*1024
-        ram = self.meminfo.MemTotal
-        min_disksize = (1.5*ram if ram <= 8*GB else 4*GB)
+        min_disksize = self.disksize_target()
         actual_disksize = self.effective.stats.disksize
         ok = '....' if min_disksize <= actual_disksize else ' NOT'
         lines.append(f'{human(actual_disksize):>16} : {"zRAM.disksize".ljust(27, ".")}'
                     f'{ok} >= {human(min_disksize)}')
+        return lines
 
-        # Body section (dynamic stats) - no separator line
-        lines.append(f'{human(meminfo.MemTotal):>16} : {"Total Memory":<16} '
-                    f'eTotal={self.human_pct(eff.e_max_used)}')
-        lines.append(f'{self.human_pct(meminfo.MemUsed):>16} : {"Used":<16} '
-                    f' eUsed={self.human_pct(eff.e_used)}')
-        lines.append(f'{self.human_pct(meminfo.MemAvailable):>16} : {"Available":<16} '
-                    f'eAvail={self.human_pct(eff.e_avail)}')
+    def body_rows(self):
+        """The live band as ``[(text, role), ...]`` rows.
+
+        *role* is a ``Theme`` semantic pair id that the Screen resolves with
+        ``semantic_attr()`` when it draws; ``None`` leaves that run plain.
+        `body_lines()` flattens the same rows for ``print()``.
+        """
+        rows = []
+        meminfo = self.meminfo
+        eff = self.effective
+        # The registry's one-cell right arrow (ASCII '->'), not a pasted →:
+        # transliterate() turns → into ➡ in the window but leaves a print()
+        # untouched, so the two views would disagree.  ⇒ (arrow_double_right)
+        # reads well but is East-Asian Ambiguous and find_issues() flags it.
+        arrow = Glyphs.get('nav_next')
+        hotswap = Theme.HOTSWAP
+
+        # Body section (dynamic stats) - no separator line.  The effective
+        # value is one run, so the whole "eTotal=..." string carries the role.
+        rows.append([
+            (f'{human(meminfo.MemTotal):>16} : {"Total Memory":<16} ', None),
+            (f'eTotal={self.human_pct(eff.e_max_used)}', hotswap),
+        ])
+        rows.append([
+            (f'{self.human_pct(meminfo.MemUsed):>16} : {"Used":<16}  ', None),
+            (f'eUsed={self.human_pct(eff.e_used)}', hotswap),
+        ])
+        rows.append([
+            (f'{self.human_pct(meminfo.MemAvailable):>16} : {"Available":<16} ', None),
+            (f'eAvail={self.human_pct(eff.e_avail)}', hotswap),
+        ])
 
         for dev, stats in self.devs.items():
             # Align colons with all other lines (column 17)
             # Combine device name with uncmpr, right-align to match other lines
             uncmpr_label = f'{dev}: uncmpr'
-            lines.append(f'{uncmpr_label:>16} : {human(stats.orig_data_size)} limit={human(stats.disksize)}')
+            rows.append([
+                (f'{uncmpr_label:>16} : {human(stats.orig_data_size)} '
+                 f'limit={human(stats.disksize)}', None),
+            ])
 
             # Pure compression factor (data reduction only)
             factor = (stats.orig_data_size/stats.compr_data_size
@@ -421,21 +442,53 @@ class ZramAdvisor:
             ratio_proj = eff.ratio_projected if eff.ratio_projected else factor
             conf = eff.projection_confidence
 
-            # Compact cmpr line - align colon with all other lines
-            line = f'{"cmpr":>16} : {self.human_pct(stats.compr_data_size)} {factor:.2f}:1'
+            # Compact cmpr line - align colon with all other lines.  The
+            # confidence note is its own run, so it can carry a role without
+            # changing the row's text (parens included in the colored run).
+            row = [(f'{"cmpr":>16} : {self.human_pct(stats.compr_data_size)} '
+                    f'{factor:.2f}:1', None)]
             if ratio_current != factor:
-                line += f' eff={ratio_current:.2f}:1'
+                row.append((f' eff={ratio_current:.2f}:1', None))
             if conf:
-                line += f' → {ratio_proj:.2f}:1 ({conf})'
-            lines.append(line)
+                role = {'uncertain': Theme.DANGER,
+                        'confident': Theme.SUCCESS}.get(conf)
+                row.append((f' {arrow} {ratio_proj:.2f}:1 ', None))
+                row.append((f'({conf})', role))
+            rows.append(row)
 
             ram_part = (self.human_pct(stats.mem_used_total)
                        if stats.mem_used_total > 0 else 'n/a')
-            lines.append(f'{"RAM":>16} : {ram_part} '
-                        f'most={self.human_pct(stats.mem_used_max)} '
-                        f'limit={self.human_pct(stats.mem_limit)}')
+            rows.append([
+                (f'{"RAM":>16} : {ram_part} '
+                 f'most={self.human_pct(stats.mem_used_max)} '
+                 f'limit={self.human_pct(stats.mem_limit)}', None),
+            ])
 
-        return lines
+        return rows
+
+    def body_lines(self):
+        """The live band as plain text, for `print()` and the final snapshot."""
+        return [''.join(text for text, _ in row) for row in self.body_rows()]
+
+    def display_lines(self):
+        """The full snapshot; `--unload` and the final print use it."""
+        return self.header_lines() + self.body_lines()
+
+    def attention_notes(self):
+        """Short names of the checks outside their recommended range.
+
+        The status row shows the joined list while it is non-empty, so this is
+        what turns the per-row "NOT" markers into one visible warning without
+        changing the fixed-width rows themselves.
+        """
+        notes = [f'vm.{param.name}={param.value}'
+                 for param in self.params.values()
+                 if not param.least <= param.value <= param.most]
+        disksize = self.effective.stats.disksize
+        target = self.disksize_target()
+        if disksize < target:
+            notes.append(f'disksize={human(disksize)}<{human(target)}')
+        return notes
 
     def show_system_summary(self, once=False):
         """ Display system summary using console-window (or print if once=True) """
@@ -445,39 +498,39 @@ class ZramAdvisor:
 
         # For once mode, just print and exit
         if once:
-            lines = self._build_display_lines()
-            for line in lines:
+            for line in self.display_lines():
                 print(line)
             return
 
-        # Use console-window for live updating display
-        try:
-            from console_window import ConsoleWindow, ConsoleWindowOpts
-        except ImportError:
-            print("ERROR: console-window not installed. Install with: pip install console-window")
-            sys.exit(1)
-
-        win = ConsoleWindow(ConsoleWindowOpts(head_line=True,
-                            ctrl_c_terminates=False, keys=[0x3]))
+        # The 3.x loop: one Screen owns the content, the window only paints it.
+        # `keys=` seeds the quit set; any other non-navigation key still ends
+        # the monitor through the default `relax_handled_keys`.
+        #
+        # return_if_pos_change=False keeps a j/k/arrow scroll from returning a
+        # key: prompt() repaints the page itself and keeps waiting, so the
+        # one-second timeout still means "take a fresh sample", not "the user
+        # scrolled and we must re-read /proc".
+        #
+        # NO_COLOR is the library's 3.x convention, not a window default: it
+        # selects the real `mono` theme, and the application must make that
+        # decision before the window exists.  An empty answer keeps the
+        # library default.
+        theme = resolve_appearance(saved_theme='', environ=os.environ)
+        self.win = ConsoleWindow(
+            ConsoleWindowOpts(head_line=True, ctrl_c_terminates=False,
+                              keys=QUIT_KEYS, return_if_pos_change=False,
+                              theme=theme or None),
+            backend=self.window_backend,
+            singleton=self.window_singleton)
+        self.screen = SummaryScreen(self)
         time.sleep(2)  # Initial delay
 
         try:
             while True:
-                lines = self._build_display_lines()
-
-                # Split into header (static) and body (dynamic)
-                # Header is: timestamp+distro, vm params, disksize
-                # Body is: memory stats and zRAM device info
-                header_end = 2 + len(self.params)
-
-                win.clear()
-                for line in lines[:header_end]:
-                    win.add_header(line)
-                for line in lines[header_end:]:
-                    win.add_body(line)
-
-                win.render()
-                key = win.prompt(seconds=1.0)
+                self.screen.clear()        # adopts the screen and resets content
+                self.screen.draw_screen()  # add_header()/add_body()/status()
+                self.win.render()
+                key = self.win.prompt(seconds=1.0)
 
                 if key or self.DB:
                     # User pressed a key (including ctrl+c=0x3) or debug mode
@@ -491,10 +544,9 @@ class ZramAdvisor:
         finally:
             # ALWAYS print final snapshot after exiting console-window
             # (whether by keypress, ctrl+c, or exception)
-            win.stop_curses()
+            self.win.stop_curses()
             print("\nFinal snapshot:")
-            lines = self._build_display_lines()
-            for line in lines:
+            for line in self.display_lines():
                 print(line)
             print()
 
@@ -553,6 +605,48 @@ class ZramAdvisor:
             print(import_html, end='')
         else:
             loop()
+
+####################################################################################
+class SummaryScreen(Screen):
+    """The live monitor's single page; the advisor is ``self.app``.
+
+    console-window 3.x moved the content writers from the window onto the
+    Screen, so the page is drawn here and the window only paints it.  The
+    legend uses the markup form of ``add_fancy_header()``: the leading
+    ``zram-advisor`` is the LABEL and ``[q]`` marks the quit key.
+    """
+
+    def draw_screen(self):
+        """Draw the legend, the settings band and the live stats."""
+        self.set_pick_mode(False)
+        self.add_fancy_header(
+            'zram-advisor  [q]uit  Ctrl-C also quits',
+            mode='Underline', line_attr=curses.A_DIM)
+        for line in self.app.header_lines():
+            self.add_header(line)
+        for row in self.app.body_rows():
+            for index, (text, role) in enumerate(row):
+                attr = None if role is None else semantic_attr(role)
+                self.add_body(text, attr=attr, resume=index > 0)
+        self._announce_attention()
+
+    def _announce_attention(self):
+        """Show the out-of-range warning on the status row, or clear it.
+
+        The status row is the separator row, so a live warning replaces the
+        rule while it applies.  Clearing it each pass matters: the message is
+        window state, not screen content, and would otherwise outlive the
+        condition it describes.
+        """
+        notes = self.app.attention_notes()
+        if notes:
+            badge = Glyphs.get('star_glow')
+            self.win.status(f'{badge} outside recommendation: {", ".join(notes)}',
+                            level='warn')
+        else:
+            self.win.clear_status()
+
+
 def run():
     """ Entry point"""
     try:

@@ -71,7 +71,9 @@ classifiers = [
     "Operating System :: POSIX :: Linux",
 ]
 dependencies = [
-    "console-window==2.2.2",
+    # `~=` means "the latest 3.1.x": 3.1.0 and 3.1.7 are accepted, 3.2.0
+    # and 3.0.0 are not.  The 3.x Screen model is required by main.py.
+    "console-window ~= 3.1.0",
 ]
 
 [project.optional-dependencies]

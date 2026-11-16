@@ -47,6 +47,7 @@ Simply run `zram-advisor` to see your current zRAM status. If you see "NO zRAM",
 When you run `zram-advisor`, you'll see output like this:
 
 ```
+zram-advisor  quit  Ctrl-C also quits
 13:24:48  Distro : Ubuntu 24.04.2 LTS
              180 : vm.swappiness.................. in [150, 200]
                0 : vm.watermark_boost_factor...... in [0, 0]
@@ -58,14 +59,21 @@ When you run `zram-advisor`, you'll see output like this:
         6.2G/81% : Used              eUsed=8.1G/107%
         1.5G/19% : Available        eAvail=8.2G/107%
    zram0: uncmpr : 2.6G limit=12G
-            cmpr : 607.3M/8% 4.34:1 eff=4.23:1 → 3.60:1 (confident)
+            cmpr : 607.3M/8% 4.34:1 eff=4.23:1 ➡ 3.60:1 (confident)
              RAM : 623.1M/8% most=941M/12% limit=0
 ```
+
+**Color** - Semantic color follows the terminal. `NO_COLOR=1 zram-advisor`
+selects the monochrome theme: `(uncertain)` stays bold+reverse, `(confident)`
+stays bold, and the hot-swap values become plain text.
 
 **Top section** - Kernel parameters and their recommended ranges:
 - Lines show actual values and whether they're in acceptable ranges
 - "NOT in" prefix means a parameter is outside recommended values
 - `disksize` is the maximum uncompressed data zRAM will accept
+- When something is out of range, the separator row carries a
+  **🌟 outside recommendation:** line naming the settings and any small
+  `disksize` (in ASCII terminals the badge is `S `)
 
 **Middle section** - Memory statistics with "effective" projections:
 - **Total Memory**: Physical RAM installed
@@ -74,6 +82,9 @@ When you run `zram-advisor`, you'll see output like this:
 - **eUsed**: Effective memory used if compressed data were expanded (107% of physical - you're using more than your physical RAM thanks to compression!)
 - **Available**: Remaining available physical RAM
 - **eAvail**: Projected effective memory available
+- The `eTotal=`, `eUsed=` and `eAvail=` values are drawn in the theme's
+  hot-swap color when color is on, so the compressed-memory effect stands out
+  from the physical figures beside it (they are plain in monochrome)
 
 **Bottom section** - Per-device zRAM statistics (usually just zram0):
 - **uncmpr**: Uncompressed data stored in zRAM (2.6G out of 12G limit)
@@ -81,10 +92,10 @@ When you run `zram-advisor`, you'll see output like this:
   - `607.3M/8%`: Actual compressed size and percentage of disksize used
   - `4.34:1`: Pure compression ratio (algorithm efficiency: 2.6G→607.3M)
   - `eff=4.23:1`: Effective ratio including zRAM metadata overhead (623.1M actual RAM for 2.6G data)
-  - `→ 3.60:1 (confident)`: Projected ratio when zRAM fills, with confidence level
-    - `uncertain`: <10% of disksize used - projection unreliable
-    - `confident`: 10-50% used - good confidence
-    - `certain`: >50% used - high confidence
+  - `➡ 3.60:1 (confident)`: Projected ratio when zRAM fills, with confidence level
+    - `uncertain`: <10% of disksize used - projection unreliable (danger color)
+    - `confident`: 10-50% used - good confidence (success color)
+    - `certain`: >50% used - high confidence (plain text)
 - **RAM**: Physical RAM consumed by zRAM
   - `623.1M/8%`: Current usage and percentage of physical RAM
   - `most=941M/12%`: Peak usage since boot
