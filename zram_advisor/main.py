@@ -1,0 +1,633 @@
+#!/usr/bin/env python3
+"""
+Program to analyze the zRAM configuration (if any) and suggest
+some improvements.
+
+===== References =====
+www.kernel.org/doc/Documentation/blockdev/zram.txt
+fedoraproject.org/wiki/Changes/Scale_ZRAM_to_full_memory_size
+kernelnewbies.org/Linux_5.8 - when swappiness rose to 2020-08-02
+
+Tested on:
+ - Linux Mint (Mate) 21.3 - 6.5 kernel (upgraded)
+ - Debian (KDE) 12.4.0
+ - Linux Lite 6.6 - 5.x kernel
+ - elementary OS 7.1 Horus
+"""
+# pylint: disable=invalid-name,multiple-statements,global-statement
+# pylint: disable=too-many-instance-attributes,broad-exception-caught
+# pylint: disable=too-many-locals
+
+import argparse
+import configparser
+import curses
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import time
+import traceback
+from types import SimpleNamespace
+
+from console_window import (
+    ConsoleWindow,
+    ConsoleWindowOpts,
+    Glyphs,
+    Screen,
+    Theme,
+    resolve_appearance,
+    semantic_attr,
+)
+
+from zram_advisor import __version__
+
+##############################################################################
+
+#: Keys the live monitor returns; `relax_handled_keys` (the 3.x default) also
+#: lets any non-navigation key through, so this is the documented quit set.
+QUIT_KEYS = (0x3, ord('q'), ord('Q'))
+
+##############################################################################
+def human(number):
+    """ Return a concise number description."""
+    if number <= 0:
+        return '0'
+    suffixes = ['', 'K', 'M', 'G', 'T', 'Q']
+    while suffixes:
+        suffix = suffixes.pop(0)
+        if number < 999.95 or not suffixes:
+            num = f'{number:.1f}'
+            num = num[0:-2] if num.endswith('.0') else num
+            return f'{num}{suffix}'
+        number /= 1024
+    return 'TooHuge'
+
+##############################################################################
+def compute_zram_effective(meminfo_total, meminfo_used,
+                          zram_orig_data_size, zram_mem_used_total,
+                          zram_disksize, zram_mem_limit=0, limit_pct=80):
+    """
+    Compute effective memory values accounting for zRAM compression.
+
+    This is a PORTABLE function that can be copy-pasted between projects.
+    NO class dependencies - all inputs passed as parameters.
+
+    Args:
+        meminfo_total: Total physical RAM in bytes
+        meminfo_used: Currently used RAM in bytes
+        zram_orig_data_size: Uncompressed data size stored in zRAM (bytes)
+        zram_mem_used_total: Physical RAM consumed by zRAM including overhead (bytes)
+        zram_disksize: Max uncompressed data zRAM will accept (bytes)
+        zram_mem_limit: Max RAM zRAM can use (0=unlimited) (bytes)
+        limit_pct: Arbitrary limit on % of RAM zRAM should use (default 80%)
+
+    Returns:
+        SimpleNamespace with:
+            - e_used: Effective memory used (uncompressed equivalent)
+            - e_avail: Effective memory available
+            - e_max_used: Maximum effective memory at full zRAM capacity
+            - ratio_current: Current effective compression ratio
+            - ratio_projected: Projected ratio accounting for degradation
+            - projection_confidence: 'low', 'medium', or 'high'
+            - usage_fraction: Fraction of disksize currently used
+    """
+    # Calculate effective used memory (what it would be if uncompressed)
+    e_used = meminfo_used - zram_mem_used_total + zram_orig_data_size
+
+    # Determine compression ratio
+    ratio = None
+    if e_used <= meminfo_used:  # zRAM not helping yet
+        e_used = meminfo_used
+        ratio = 2.75  # Conservative guess for projection when no data yet
+
+    if ratio is None:  # Calculate actual ratio
+        ratio = zram_orig_data_size / zram_mem_used_total if zram_mem_used_total > 0 else 2.75
+
+    # Apply memory limit if configured
+    if zram_mem_limit > 0:
+        stats_limit_pct = (zram_mem_limit / meminfo_total) * 100
+        limit_pct = min(100.0, limit_pct, stats_limit_pct)
+
+    # Calculate usage fraction and apply degradation
+    usage_fraction = zram_orig_data_size / zram_disksize if zram_disksize > 0 else 0
+
+    # Degradation logic based on current usage
+    if usage_fraction < 0.10:
+        degradation_factor = 0.75  # Aggressive: little real data
+        confidence = "uncertain"
+    elif usage_fraction < 0.50:
+        degradation_factor = 0.85  # Moderate: some real data
+        confidence = "confident"
+    else:
+        degradation_factor = 0.95  # Conservative: lots of real data
+        confidence = "certain"
+
+    projected_ratio = ratio * degradation_factor
+
+    # Project maximum effective memory when zRAM fills to limit
+    e_max_used = projected_ratio * meminfo_total * limit_pct / 100
+    # Cap by disksize limit
+    e_max_used = min(e_max_used, zram_disksize)
+    # Add uncompressed memory not in zRAM
+    e_max_used += meminfo_total - e_max_used / projected_ratio
+
+    # Calculate effective available
+    e_avail = e_max_used - e_used
+
+    return SimpleNamespace(
+        e_used=e_used,
+        e_avail=e_avail,
+        e_max_used=e_max_used,
+        ratio_current=ratio,
+        ratio_projected=projected_ratio,
+        projection_confidence=confidence,
+        usage_fraction=usage_fraction
+    )
+
+##############################################################################
+class ZramAdvisor:
+    """ Workhorse class for zram-advisor """
+    def __init__(self):
+        self.meminfo = None #selected info from meminfo
+        self.effective = None # effective system params
+        self.devs = None # info about zram devices
+        self.params = None # related kernel parameters
+        self.release = None
+        self.ram_total = 0
+        self.script_dir = os.path.dirname(os.path.realpath(__file__))
+        # options:
+        self.DB = False
+        self.limit_pct = 80 # arbitrary limit on amount of RAM used by zRAM
+        # Test seams (the 3.x recipe's trap 8): a HeadlessBackend here, and
+        # `singleton=False` so a test window never latches the process model.
+        self.window_backend = None
+        self.window_singleton = True
+
+    def human_pct(self, number):
+        """ Return the number in human form and as pct total memory. """
+        rv = human(number)
+        if number > 0 and self.ram_total > 0:
+            fraction = number/self.ram_total
+            pct = int(round(100*fraction))
+            rv += f'/{pct}%'
+        return rv
+
+    def get_meminfo(self):
+        """Get most vital stats from /proc/meminfo'"""
+        meminfofile = '/proc/meminfo'
+        meminfo = {'MemTotal': 0, 'MemAvailable': 0, 'Dirty':0, 'Shmem':0}
+        keys = list(meminfo.keys())
+
+        with open(meminfofile, encoding='utf-8') as fileh:
+            for line in fileh:
+                match = re.match(r'^([^:]+):\s+(\d+)\s*kB', line)
+                if not match:
+                    continue
+                key, value = match.group(1), int(match.group(2))
+                if key not in keys:
+                    continue
+                meminfo[key] = value * 1024
+                keys.remove(key)
+                if not keys:
+                    break
+        if keys:
+            raise RuntimeError(
+                f'ALERT: cannot get vitals ({keys}) from {meminfofile}')
+        ns = SimpleNamespace(**meminfo)
+        ns.MemUsed = ns.MemTotal - ns.MemAvailable # synthetic
+        if self.DB:
+            print(f'DB: meminfo: {ns}')
+        if self.DB:
+            print(f'DB: RAM={human(ns.MemTotal)}')
+        self.ram_total = ns.MemTotal
+        return ns
+
+    def load_script(self):
+        """ Give the user the onboot script"""
+        pathname = os.path.join(self.script_dir, 'fix-zram.sh')
+        with open(pathname, encoding='utf8') as fh:
+            script = fh.read()
+        return script
+
+    def run_script(self, keyword, arguments=None):
+        """ Dump 'fix-zram' into a private temp file and run it as root."""
+        script = self.load_script()
+        fd, pathname = tempfile.mkstemp(prefix='fix-zram-', suffix='.sh')
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as fh:
+                fh.write(script)
+            os.chmod(pathname, 0o700)
+            arguments = [] if arguments is None else list(arguments)
+            subprocess.run(
+                ['sudo', 'bash', pathname, f'--{keyword}', *arguments],
+                check=False)
+        finally:
+            try:
+                os.remove(pathname)
+            except OSError:
+                pass
+
+    def create_site_import(self):
+        """ Get a randomly chosen site """
+        random_site_file = os.path.join(self.script_dir, 'random-sites.txt')
+        with open(random_site_file, encoding='utf8') as fh:
+            sites = [line.rstrip('\n') for line in fh]
+        rv = """<!DOCTYPE NETSCAPE-Bookmark-file-1>
+<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">
+<TITLE>Bookmarks</TITLE>
+<H1>Bookmarks</H1><DL><p>
+"""
+        rv += '<DT><H3>Rand0</H3><DL><p>\n'
+        for idx, site in enumerate(sites):
+            if idx and idx % 10 == 0:
+                rv += f'</DL><p>\n<DT><H3>Rand{idx//10}</H3><DL><p>\n'
+            href = f'https://{site}/'
+            site = site[4:] if site.startswith('www.') else site
+            rv += f'     <DT><A HREF="{href}">{site}</A>\n'
+        rv += '</DL><p>\n</DL><p>\n'
+        return rv
+
+    def get_zram_stats(self):
+        """ Get only what we want
+         * orig_data_size   uncompressed size of data stored in this disk.
+         * compr_data_size  compressed size of data stored in this disk
+         * mem_used_total   the amount of memory allocated for this disk.
+         * mem_limit        max RAM ZRAM can use to store (0 means unlimited)
+         * mem_used_max     max RAM zram has consumed to store the data
+        """
+        fields = ('orig_data_size compr_data_size mem_used_total'
+                 + ' mem_limit mem_used_max').split()
+        infos = {}
+        zram_devices = sorted([device for device in os.listdir('/sys/class/block/')
+                    if device.startswith('zram')])
+        for device in zram_devices:
+            statfile = f'/sys/class/block/{device}/mm_stat'
+            if not os.path.exists(statfile):
+                continue # not active
+            with open(statfile, encoding='utf-8') as fileh:
+                ns = SimpleNamespace()
+                for line in fileh: # all the goodies are on 1st line
+                    nums = line.split()
+                    for idx, field in enumerate(fields):
+                        setattr(ns, field, int(nums[idx]))
+                    break
+                infos[device] = ns
+            for param in ('disksize', ):
+                statfile = f'/sys/class/block/{device}/{param}'
+                with open(statfile, encoding='utf-8') as fileh:
+                    for line in fileh: # one value, one line
+                        setattr(ns, param, int(line.strip()))
+                        break
+            if self.DB:
+                print(f'DB: {device}: {ns}')
+
+        return infos
+
+    def get_vm_params(self):
+        """ Looking for (and good values):
+            vm.swappiness = 180
+            vm.watermark_boost_factor = 0
+            vm.watermark_scale_factor = 125
+            vm.page-cluster = 0
+        """
+        def add_param(coll, name, least, most):
+            key = name.replace('-', '_')
+            coll[key] = SimpleNamespace(
+                name=name, value=None, least=least, most=most, key=key)
+        params = {}
+        add_param(params, 'swappiness', 150, 200)
+        add_param(params, 'watermark_boost_factor', 0, 0)
+        add_param(params, 'watermark_scale_factor', 125, 125)
+        add_param(params, 'page-cluster', 0, 0)
+
+        vm_dirname = '/proc/sys/vm'
+        for param in params.values():
+            param_file = os.path.join(vm_dirname, param.name)
+            with open(param_file, encoding='utf-8') as fileh:
+                param.value = int(fileh.readline().strip())
+        if self.DB:
+            print(f'DB: vm.params: {params}')
+        return params
+
+    def get_name_value_info(self, pathname):
+        """ Parse a name=value file; e.g., pathname
+            - keys are made lower case for uniformity because it varies
+            - values are left intact
+        """
+        ns = SimpleNamespace()
+        parser = configparser.ConfigParser()
+        with open(pathname, encoding='utf-8') as stream:
+            parser.read_string('[top]\n' + stream.read())
+
+        for section in parser.sections():
+            for key, value in parser.items(section):
+                setattr(ns, key.lower(), value.replace('"', ''))
+        if self.DB:
+            print(f'DB: {os.path.basename(pathname)}: {ns}')
+        return ns
+
+    def compute_effective(self):
+        """ Compute the effective values wrapper - calls portable function """
+        def dump_effective(ns, annotation=''):
+            nonlocal self
+            for key, value in vars(ns).items():
+                print(f'DB: {annotation} {key}: {self.human_pct(value)}')
+
+        if not self.devs:
+            return None
+        meminfo = self.meminfo
+
+        # Aggregate stats from all zRAM devices
+        stats = None
+        for stat in self.devs.values():
+            # NOTE: generalization for more than one weak unless all
+            #        are identically configured
+            if not stats:
+                stats = vars(stat).copy()
+                continue
+            for key, value in vars(stat).items():
+                stats[key] += value
+        stats = SimpleNamespace(**stats)
+
+        # Call the portable computation function
+        result = compute_zram_effective(
+            meminfo_total=meminfo.MemTotal,
+            meminfo_used=meminfo.MemUsed,
+            zram_orig_data_size=stats.orig_data_size,
+            zram_mem_used_total=stats.mem_used_total,
+            zram_disksize=stats.disksize,
+            zram_mem_limit=stats.mem_limit,
+            limit_pct=self.limit_pct
+        )
+
+        # Add stats for backward compatibility
+        result.stats = stats
+
+        if self.DB:
+            dump_effective(result)
+        return result
+
+
+    def disksize_target(self):
+        """The smallest disksize worth configuring for this much RAM."""
+        GB = 1024*1024*1024
+        ram = self.meminfo.MemTotal
+        return 1.5*ram if ram <= 8*GB else 4*GB
+
+    def header_lines(self):
+        """The static band: release, kernel parameters and the disksize check."""
+        lines = []
+        # Header section - add HH:MM:SS timestamp in top left corner
+        timestamp = time.strftime("%H:%M:%S")
+        lines.append(f'{timestamp:<8}{"Distro":>8} : {self.release.marquee}')
+        for param in self.params.values():
+            ok = '....' if param.least <= param.value <= param.most else ' NOT'
+            lines.append(f'{param.value:>16} : vm.{param.name.ljust(24, ".")}'
+                        f'{ok} in [{param.least}, {param.most}]')
+
+        min_disksize = self.disksize_target()
+        actual_disksize = self.effective.stats.disksize
+        # Show the multiplier actually in effect (disksize / RAM), rounded
+        # to one decimal with a trailing ".0" omitted.
+        label = 'zRAM.disksize'
+        ram = self.meminfo.MemTotal
+        if ram > 0 and actual_disksize > 0:
+            mult = f'{actual_disksize / ram:.1f}'
+            mult = mult[:-2] if mult.endswith('.0') else mult
+            label = f'{label} ({mult}x)'
+        ok = '....' if min_disksize <= actual_disksize else ' NOT'
+        lines.append(f'{human(actual_disksize):>16} : {label.ljust(27, ".")}'
+                    f'{ok} >= {human(min_disksize)}')
+        return lines
+
+    def body_rows(self):
+        """The live band as ``[(text, role), ...]`` rows.
+
+        *role* is a ``Theme`` semantic pair id that the Screen resolves with
+        ``semantic_attr()`` when it draws; ``None`` leaves that run plain.
+        `body_lines()` flattens the same rows for ``print()``.
+        """
+        rows = []
+        meminfo = self.meminfo
+        eff = self.effective
+        arrow = Glyphs.get('nav_next')
+        hotswap = Theme.HOTSWAP
+
+        # Body section (dynamic stats) - no separator line.  The effective
+        # value is one run, so the whole "eTotal=..." string carries the role.
+        rows.append([
+            (f'{human(meminfo.MemTotal):>16} : {"Total Memory":<16} ', None),
+            (f'eTotal={self.human_pct(eff.e_max_used)}', hotswap),
+        ])
+        rows.append([
+            (f'{self.human_pct(meminfo.MemUsed):>16} : {"Used":<16}  ', None),
+            (f'eUsed={self.human_pct(eff.e_used)}', hotswap),
+        ])
+        rows.append([
+            (f'{self.human_pct(meminfo.MemAvailable):>16} : {"Available":<16} ', None),
+            (f'eAvail={self.human_pct(eff.e_avail)}', hotswap),
+        ])
+
+        for dev, stats in self.devs.items():
+            uncmpr_label = f'{dev}: uncmpr'
+            rows.append([
+                (f'{uncmpr_label:>16} : {human(stats.orig_data_size)} '
+                 f'limit={human(stats.disksize)}', None),
+            ])
+
+            # Pure compression factor (data reduction only)
+            factor = (stats.orig_data_size/stats.compr_data_size
+                        if stats.compr_data_size > 0 else 0)
+            # Effective ratio (includes zRAM overhead)
+            ratio_current = eff.ratio_current if eff.ratio_current else factor
+            ratio_proj = eff.ratio_projected if eff.ratio_projected else factor
+            conf = eff.projection_confidence
+
+            # Compact cmpr line. The # confidence note is its own run,
+            # so it can carry a role without changing the row's text
+            row = [(f'{"cmpr":>16} : {self.human_pct(stats.compr_data_size)} '
+                    f'{factor:.2f}:1', None)]
+            if ratio_current != factor:
+                row.append((f' eff={ratio_current:.2f}:1', None))
+            if conf:
+                role = {'uncertain': Theme.DANGER,
+                        'confident': Theme.SUCCESS}.get(conf)
+                row.append((f' {arrow} {ratio_proj:.2f}:1 ', None))
+                row.append((f'({conf})', role))
+            rows.append(row)
+
+            ram_part = (self.human_pct(stats.mem_used_total)
+                       if stats.mem_used_total > 0 else 'n/a')
+            rows.append([
+                (f'{"RAM":>16} : {ram_part} '
+                 f'most={self.human_pct(stats.mem_used_max)} '
+                 f'limit={self.human_pct(stats.mem_limit)}', None),
+            ])
+
+        return rows
+
+    def body_lines(self):
+        """The live band as plain text, for `print()` and the final snapshot."""
+        return [''.join(text for text, _ in row) for row in self.body_rows()]
+
+    def display_lines(self):
+        """The full snapshot; `--unload` and the final print use it."""
+        return self.header_lines() + self.body_lines()
+
+    def attention_notes(self):
+        """Short names of the checks outside their recommended range."""
+        notes = [f'vm.{param.name}={param.value}'
+                 for param in self.params.values()
+                 if not param.least <= param.value <= param.most]
+        disksize = self.effective.stats.disksize
+        target = self.disksize_target()
+        if disksize < target:
+            notes.append(f'disksize={human(disksize)}<{human(target)}')
+        return notes
+
+    def show_system_summary(self, once=False):
+        """ Display system summary using console-window (or print if once=True) """
+        if not self.devs:
+            print('   NO zRAM: zRAM is either not installed or not enabled')
+            sys.exit(1)
+
+        if once:
+            for line in self.display_lines():
+                print(line)
+            return
+
+        theme = resolve_appearance(saved_theme='', environ=os.environ)
+        self.win = ConsoleWindow(
+            ConsoleWindowOpts(head_line=True, ctrl_c_terminates=False,
+                              keys=QUIT_KEYS, return_if_pos_change=False,
+                              theme=theme or None),
+            backend=self.window_backend,
+            singleton=self.window_singleton)
+        self.screen = SummaryScreen(self)
+        time.sleep(2)  # Initial delay
+
+        try:
+            while True:
+                self.screen.clear()        # adopts the screen and resets content
+                self.screen.draw_screen()  # add_header()/add_body()/status()
+                self.win.render()
+                key = self.win.prompt(seconds=1.0)
+
+                if key or self.DB:
+                    # User pressed a key (including ctrl+c=0x3) or debug mode
+                    break
+
+                # Update data for next iteration
+                self.meminfo = self.get_meminfo()
+                self.devs = self.get_zram_stats()
+                self.effective = self.compute_effective()
+
+        finally:
+            self.win.stop_curses()
+            print("\nFinal snapshot:")
+            for line in self.display_lines():
+                print(line)
+            print()
+
+    def main(self):
+        """ Do something useful. """
+        parser = argparse.ArgumentParser()
+        parser.add_argument('-V', '--version', action='version',
+                version=f'zram-advisor {__version__}')
+        parser.add_argument('-s', '--setup-fix-zram', action="store_true",
+                help='install/run "fix-zram --setup [args ...]" for persistent install')
+        parser.add_argument('-d', '--dump-fix-zram', action="store_true",
+                help='print "fix-zram.sh" for manual install')
+        parser.add_argument('-t', '--gen-test-sites', action="store_true",
+                help='print "bookmarks.html" to import to a web-browser for load test')
+        parser.add_argument('--DB', action="store_true",
+                help='debug creation of low-level objects/data')
+        parser.add_argument('-L', '--load', action="store_true", dest='reload',
+                help='run "fix-zram --load [args ...]" to test zRAM w/o any footprint')
+        parser.add_argument('--reload', action="store_true", dest='reload',
+                help=argparse.SUPPRESS)  # deprecated alias for --load
+        parser.add_argument('-U', '--unload', action="store_true",
+                help='run "fix-zram --unload"')
+        parser.add_argument('args', nargs='*', type=str,
+                help='arguments for --load')
+        opts = parser.parse_args()
+
+        try:
+            self.release = self.get_name_value_info('/etc/os-release')
+            self.release.marquee = self.release.pretty_name
+        except Exception:  # noqa: BLE001 - fall back to the old lsb-release file
+            try:
+                self.release = self.get_name_value_info('/etc/lsb-release')
+                self.release.marquee = self.release.distrib_description
+            except Exception:  # noqa: BLE001 - no release file is not fatal
+                print("cannot get os-release or lsb-release")
+
+        def loop(once=False):
+            nonlocal self
+            self.meminfo = self.get_meminfo()
+            self.devs = self.get_zram_stats()
+            self.params = self.get_vm_params()
+            self.effective = self.compute_effective()
+            self.show_system_summary(once)
+
+        if opts.reload:
+            self.run_script('reload', opts.args)
+            loop()
+        elif opts.unload:
+            self.run_script('unload')
+            loop(once=True)
+        elif opts.dump_fix_zram:
+            script = self.load_script()
+            print(script, end='')
+        elif opts.setup_fix_zram:
+            self.run_script('setup', opts.args)
+        elif opts.gen_test_sites:
+            import_html = self.create_site_import()
+            print(import_html, end='')
+        else:
+            loop()
+
+####################################################################################
+class SummaryScreen(Screen):
+    """The live monitor's single page; the advisor is ``self.app``."""
+
+    def draw_screen(self):
+        """Draw the legend, the settings band and the live stats."""
+        self.set_pick_mode(False)
+        self.add_fancy_header(
+            'zram-advisor  [q]uit',
+            mode='Underline', line_attr=curses.A_DIM)
+        for line in self.app.header_lines():
+            self.add_header(line)
+        for row in self.app.body_rows():
+            for index, (text, role) in enumerate(row):
+                attr = None if role is None else semantic_attr(role)
+                self.add_body(text, attr=attr, resume=index > 0)
+        self._announce_attention()
+
+    def _announce_attention(self):
+        """Show the out-of-range warning on the status row, or clear it."""
+        notes = self.app.attention_notes()
+        if notes:
+            badge = Glyphs.get('star_glow')
+            self.win.status(f'{badge} outside recommendation: {", ".join(notes)}',
+                            level='warn')
+        else:
+            self.win.clear_status()
+
+
+def run():
+    """ Entry point"""
+    try:
+        ZramAdvisor().main()
+    except KeyboardInterrupt:
+        print('\n   OK, QUITTING NOW\n')
+        sys.exit(0)
+    except Exception as exce:  # noqa: BLE001 - the entry point reports, then exits 15
+        print("exception:", str(exce))
+        print(traceback.format_exc())
+        sys.exit(15)
+
+if __name__ == "__main__":
+    run()

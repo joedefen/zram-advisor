@@ -1,0 +1,32 @@
+[build-system]
+requires = ["flit_core>=3.12,<5"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "zram-advisor"
+dynamic = ["version"]
+description = "zRAM status and setup tools"
+authors = [
+    { name = "Joe Defen", email = "joedef@duck.com" },
+]
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+keywords = ["zram", "zram service"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: POSIX :: Linux",
+]
+dependencies = [
+    "console-window ~= 3.1.0",
+]
+
+[project.scripts]
+zram-advisor = "zram_advisor.main:run"
+
+[project.urls]
+"Homepage" = "https://github.com/joedefen/zram-advisor"
