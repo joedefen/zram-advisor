@@ -9,7 +9,7 @@ zRAM is compressed swap held in RAM. On a favorable workload it stores 3-4x more
 
 **About `zram-advisor --load`** (as used in the steps below):
 - **`--load` can replace existing zRAM, whoever installed it** (e.g., distro default, `zram-config`, `zramswap`, `zram-generator`, an earlier `zram-advisor --load`). It does not change that provider's configuration; see Step 5.
-- **`--load` first empties zRAM**, so memory in use at that moment must fit in physical RAM; otherwise it aborts and leaves zRAM as it was. To test alternative zRAM settings, reduce memory demand or reboot.
+- **`--load` first empties zRAM**, so memory in use at that moment must fit in physical RAM; otherwise it aborts and leaves zRAM as it was. If too much used memory cripples `--load`, reduce memory demand or reboot.
 
 ---
 
